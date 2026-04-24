@@ -1,20 +1,16 @@
 package com.friend.ios
 
 import android.content.Intent
-import android.os.Bundle
 import androidx.annotation.NonNull
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.friend.ios/notifyOnKill"
+    private val DEEP_LINK_CHANNEL = "com.omi/deep_links"
     private var bleHostApiImpl: BleHostApiImpl? = null
+    private var deepLinkChannel: MethodChannel? = null
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -33,6 +29,7 @@ class MainActivity: FlutterActivity() {
         hostApi.initCompanionManager(this)
         bleHostApiImpl = hostApi
         BleHostApi.setUp(flutterEngine.dartExecutor.binaryMessenger, hostApi)
+        deepLinkChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEEP_LINK_CHANNEL)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler {
             call, result ->
@@ -51,6 +48,19 @@ class MainActivity: FlutterActivity() {
                 result.notImplemented()
             }
         }
+
+        handleDeepLink(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDeepLink(intent)
+    }
+
+    private fun handleDeepLink(intent: Intent?) {
+        val url = intent?.dataString ?: return
+        deepLinkChannel?.invokeMethod("onDeepLink", url)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

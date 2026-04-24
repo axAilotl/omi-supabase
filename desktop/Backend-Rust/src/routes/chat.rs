@@ -4,12 +4,7 @@
 // Endpoints:
 // - POST /v2/chat-context - Get context for building chat prompts
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use chrono::{DateTime, Duration, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
@@ -254,7 +249,13 @@ async fn get_chat_context(
         Some(key) => key.clone(),
         None => {
             tracing::warn!("No Gemini API key configured, returning basic context");
-            return get_basic_context(&state.firestore, &user.uid, user.name.as_deref().unwrap_or("User"), &request).await;
+            return get_basic_context(
+                &state.firestore,
+                &user.uid,
+                user.name.as_deref().unwrap_or("User"),
+                &request,
+            )
+            .await;
         }
     };
 
@@ -290,21 +291,22 @@ async fn get_chat_context(
     tracing::info!("Extracted date range: {:?}", date_range);
 
     // Step 3: Fetch conversations (with date filter if available)
-    let conversations = get_relevant_conversations(
-        &state.firestore,
-        &user.uid,
-        date_range.as_ref(),
-    ).await;
+    let conversations =
+        get_relevant_conversations(&state.firestore, &user.uid, date_range.as_ref()).await;
 
     // Step 4: Fetch user memories
     let memories = get_user_memories(&state.firestore, &user.uid).await;
 
     // Step 5: Build context string for prompt (including conversation history and app context)
-    let (base_context, citation_sources) = build_context_string(&conversations, &memories, &request.timezone);
+    let (base_context, citation_sources) =
+        build_context_string(&conversations, &memories, &request.timezone);
 
     // Add app-specific context if available
     let context_with_app = if let Some((app_name, chat_prompt, persona_prompt)) = &app_context {
-        let mut app_section = format!("<app_context>\nYou are chatting as the \"{}\" assistant.\n", app_name);
+        let mut app_section = format!(
+            "<app_context>\nYou are chatting as the \"{}\" assistant.\n",
+            app_name
+        );
         if let Some(persona) = persona_prompt {
             if !persona.is_empty() {
                 app_section.push_str(&format!("Persona: {}\n", persona));
@@ -515,7 +517,11 @@ async fn generate_session_title(
         tracing::warn!("Failed to update session title: {}", e);
     }
 
-    tracing::info!("Generated title for session {}: {}", request.session_id, title);
+    tracing::info!(
+        "Generated title for session {}: {}",
+        request.session_id,
+        title
+    );
 
     Ok(Json(GenerateTitleResponse { title }))
 }
@@ -545,7 +551,11 @@ fn format_conversation_history(messages: &[ChatMessageInput], user_name: &str) -
     let mut lines = vec!["Previous messages in this conversation:".to_string()];
     // Take last 10 messages to avoid prompt bloat
     for msg in messages.iter().rev().take(10).rev() {
-        let role = if msg.sender == "human" { user_name } else { "Assistant" };
+        let role = if msg.sender == "human" {
+            user_name
+        } else {
+            "Assistant"
+        };
         // Truncate very long messages
         let text = if msg.text.len() > 500 {
             format!("{}...", truncate_str(&msg.text, 500))
@@ -578,11 +588,7 @@ async fn check_requires_context(
 }
 
 /// Extract date range from question using LLM
-async fn extract_date_range(
-    llm: &LlmClient,
-    question: &str,
-    timezone: &str,
-) -> Option<DateRange> {
+async fn extract_date_range(llm: &LlmClient, question: &str, timezone: &str) -> Option<DateRange> {
     let now = Utc::now();
     let prompt = DATE_EXTRACTION_PROMPT
         .replace("{question}", question)
@@ -700,17 +706,16 @@ fn build_context_string(
         for (i, conv) in conversations.iter().take(10).enumerate() {
             let index = i + 1;
             let date_str = if let Some(tz) = tz {
-                conv.created_at.with_timezone(&tz).format("%Y-%m-%d").to_string()
+                conv.created_at
+                    .with_timezone(&tz)
+                    .format("%Y-%m-%d")
+                    .to_string()
             } else {
                 conv.created_at.format("%Y-%m-%d").to_string()
             };
             conv_lines.push(format!(
                 "[{}] {} {} - {} ({})",
-                index,
-                conv.emoji,
-                conv.title,
-                conv.overview,
-                date_str
+                index, conv.emoji, conv.title, conv.overview, date_str
             ));
 
             // Track citation source
@@ -730,9 +735,13 @@ fn build_context_string(
         conv_lines.push(String::new());
         conv_lines.push("<citing_instructions>".to_string());
         conv_lines.push("When answering questions using the conversations above, cite your sources using [index] format.".to_string());
-        conv_lines.push("- Cite at the end of sentences that use information from conversations".to_string());
+        conv_lines.push(
+            "- Cite at the end of sentences that use information from conversations".to_string(),
+        );
         conv_lines.push("- NO SPACE between the last word and citation: \"discussed yesterday[1]\" not \"discussed yesterday [1]\"".to_string());
-        conv_lines.push("- Use multiple citations if needed: \"mentioned in meetings[1][3]\"".to_string());
+        conv_lines.push(
+            "- Use multiple citations if needed: \"mentioned in meetings[1][3]\"".to_string(),
+        );
         conv_lines.push("</citing_instructions>".to_string());
 
         parts.push(conv_lines.join("\n"));
@@ -784,11 +793,15 @@ async fn get_basic_context(
 
     // Include conversation history in context string
     let conversation_history = format_conversation_history(&request.messages, user_name);
-    let (base_context, citation_sources) = build_context_string(&conversations, &memories, &request.timezone);
+    let (base_context, citation_sources) =
+        build_context_string(&conversations, &memories, &request.timezone);
 
     // Add app-specific context if available
     let context_with_app = if let Some((app_name, chat_prompt, persona_prompt)) = &app_context {
-        let mut app_section = format!("<app_context>\nYou are chatting as the \"{}\" assistant.\n", app_name);
+        let mut app_section = format!(
+            "<app_context>\nYou are chatting as the \"{}\" assistant.\n",
+            app_name
+        );
         if let Some(persona) = persona_prompt {
             if !persona.is_empty() {
                 app_section.push_str(&format!("Persona: {}\n", persona));
@@ -808,7 +821,10 @@ async fn get_basic_context(
     let context_string = if request.messages.is_empty() {
         context_with_app
     } else {
-        format!("<current_conversation>\n{}\n</current_conversation>\n\n{}", conversation_history, context_with_app)
+        format!(
+            "<current_conversation>\n{}\n</current_conversation>\n\n{}",
+            conversation_history, context_with_app
+        )
     };
 
     Ok(Json(ChatContextResponse {

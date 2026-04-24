@@ -1,29 +1,49 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
-import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:intercom_flutter/intercom_flutter.dart';
 import 'package:talker_flutter/talker_flutter.dart';
 
 import 'package:omi/utils/debug_log_manager.dart';
+import 'package:omi/utils/debugging/crash_reporter_manager.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 
-class CrashlyticsTalkerObserver extends TalkerObserver {
-  CrashlyticsTalkerObserver();
+class CrashReporterTalkerObserver extends TalkerObserver {
+  CrashReporterTalkerObserver();
+
+  Future<void> _report(
+    Object? exception,
+    StackTrace? stackTrace, {
+    String? reason,
+  }) {
+    final resolvedException = exception ?? Exception(reason ?? 'Unknown Talker error');
+    final resolvedStackTrace = stackTrace ?? StackTrace.current;
+    final attributes = <String, String>{};
+    if (reason != null && reason.isNotEmpty) {
+      attributes['reason'] = reason;
+    }
+    return CrashReporterManager.instance.reportCrash(
+      resolvedException,
+      resolvedStackTrace,
+      userAttributes: attributes.isEmpty ? null : attributes,
+    );
+  }
 
   @override
   void onError(err) {
-    FirebaseCrashlytics.instance.recordError(err.error, err.stackTrace, reason: err.message);
+    unawaited(_report(err.error, err.stackTrace, reason: err.message));
   }
 
   @override
   void onException(err) {
-    FirebaseCrashlytics.instance.recordError(err.exception, err.stackTrace, reason: err.message);
+    unawaited(_report(err.exception, err.stackTrace, reason: err.message));
   }
 }
 
 class Logger {
-  final crashlyticsTalkerObserver = CrashlyticsTalkerObserver();
-  late final talker = TalkerFlutter.init(observer: crashlyticsTalkerObserver);
+  final crashReporterTalkerObserver = CrashReporterTalkerObserver();
+  late final talker = TalkerFlutter.init(observer: crashReporterTalkerObserver);
 
   Logger._();
 

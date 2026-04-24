@@ -96,6 +96,7 @@
         const code = "{{ code }}";
         const state = "{{ state }}";
         const error = "{{ error if error is defined else '' }}";
+        const redirectUri = "{{ redirect_uri if redirect_uri is defined else 'omi://auth/callback' }}";
 
         const errorElement = document.getElementById('error');
         const messageElement = document.getElementById('message');
@@ -108,8 +109,11 @@
             spinnerElement.style.display = 'none';
             messageElement.textContent = 'Please close this window and try again.';
         } else if (code) {
-            // Build the custom scheme redirect URL
-            let redirectUrl = 'omi://auth/callback?code=' + encodeURIComponent(code);
+            // Build the redirect target using the callback supplied by the caller.
+            // Web auth passes an https callback page, native auth passes a custom scheme.
+            let redirectUrl = redirectUri || 'omi://auth/callback';
+            redirectUrl += redirectUrl.includes('?') ? '&' : '?';
+            redirectUrl += 'code=' + encodeURIComponent(code);
             if (state) {
                 redirectUrl += '&state=' + encodeURIComponent(state);
             }

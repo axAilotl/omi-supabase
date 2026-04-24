@@ -1,11 +1,6 @@
 // Stats routes - PostHog analytics queries
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::AuthUser;
@@ -46,10 +41,7 @@ async fn get_chat_message_count(
     };
 
     let project_id = &state.config.posthog_project_id;
-    let url = format!(
-        "https://us.posthog.com/api/projects/{}/query/",
-        project_id
-    );
+    let url = format!("https://us.posthog.com/api/projects/{}/query/", project_id);
 
     let hogql = format!(
         "SELECT count() as cnt FROM events WHERE event = 'Chat Message Sent' AND distinct_id = '{}'",
@@ -72,7 +64,10 @@ async fn get_chat_message_count(
         .await
         .map_err(|e| {
             tracing::error!("PostHog request failed: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("PostHog request failed: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("PostHog request failed: {}", e),
+            )
         })?;
 
     if !response.status().is_success() {
@@ -84,7 +79,10 @@ async fn get_chat_message_count(
 
     let hogql_response: HogQLResponse = response.json().await.map_err(|e| {
         tracing::error!("Failed to parse PostHog response: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to parse PostHog response: {}", e))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to parse PostHog response: {}", e),
+        )
     })?;
 
     let count = hogql_response
@@ -98,6 +96,5 @@ async fn get_chat_message_count(
 }
 
 pub fn stats_routes() -> Router<AppState> {
-    Router::new()
-        .route("/v1/users/stats/chat-messages", get(get_chat_message_count))
+    Router::new().route("/v1/users/stats/chat-messages", get(get_chat_message_count))
 }

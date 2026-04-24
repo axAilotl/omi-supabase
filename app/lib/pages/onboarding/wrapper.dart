@@ -1,8 +1,8 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:provider/provider.dart';
 
@@ -28,6 +28,7 @@ import 'package:omi/services/auth_service.dart';
 import 'package:omi/utils/analytics/intercom.dart';
 import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
+import 'package:omi/utils/logger.dart';
 import 'package:omi/utils/other/temp.dart';
 import 'package:omi/widgets/device_widget.dart';
 
@@ -254,8 +255,16 @@ class _OnboardingWrapperState extends State<OnboardingWrapper> with TickerProvid
       AuthComponent(
         onSignIn: () async {
           MixpanelManager().onboardingStepCompleted('Auth');
-          context.read<HomeProvider>().setupHasSpeakerProfile();
-          IntercomManager.instance.loginIdentifiedUser(SharedPreferencesUtil().uid);
+          unawaited(
+            context.read<HomeProvider>().setupHasSpeakerProfile().catchError((Object error, StackTrace stackTrace) {
+              Logger.debug('Failed to refresh speaker profile after sign-in: $error');
+            }),
+          );
+          try {
+            await IntercomManager.instance.loginIdentifiedUser(SharedPreferencesUtil().uid);
+          } catch (e) {
+            Logger.debug('Failed to login to Intercom during onboarding sign-in: $e');
+          }
           if (SharedPreferencesUtil().onboardingCompleted) {
             await _routeWithPermissionsCheck(context);
           } else {
@@ -266,10 +275,11 @@ class _OnboardingWrapperState extends State<OnboardingWrapper> with TickerProvid
       NameWidget(
         goNext: () {
           _goNext(); // Go to Primary Language page
+          final currentUser = AuthService.instance.getCurrentUser();
           IntercomManager.instance.updateUser(
-            FirebaseAuth.instance.currentUser!.email,
-            FirebaseAuth.instance.currentUser!.displayName,
-            FirebaseAuth.instance.currentUser!.uid,
+            currentUser?.email,
+            currentUser?.displayName,
+            currentUser?.uid,
           );
           MixpanelManager().onboardingStepCompleted('Name');
         },
@@ -349,10 +359,10 @@ class _OnboardingWrapperState extends State<OnboardingWrapper> with TickerProvid
                         image: DecorationImage(
                           image: ResizeImage(
                             AssetImage(_currentBackgroundImage),
-                            width: (MediaQuery.of(context).size.width * MediaQuery.of(context).devicePixelRatio)
-                                .round(),
-                            height: (MediaQuery.of(context).size.height * MediaQuery.of(context).devicePixelRatio)
-                                .round(),
+                            width:
+                                (MediaQuery.of(context).size.width * MediaQuery.of(context).devicePixelRatio).round(),
+                            height:
+                                (MediaQuery.of(context).size.height * MediaQuery.of(context).devicePixelRatio).round(),
                           ),
                           fit: BoxFit.cover,
                         ),
@@ -364,188 +374,189 @@ class _OnboardingWrapperState extends State<OnboardingWrapper> with TickerProvid
                 ],
               )
             : _controller!.index == kNamePage ||
-                  _controller!.index == kPrimaryLanguagePage ||
-                  _controller!.index == kFoundOmiPage ||
-                  _controller!.index == kPermissionsPage ||
-                  _controller!.index == kUserReviewPage ||
-                  _controller!.index == kWelcomePage ||
-                  _controller!.index == kSpeechProfilePage ||
-                  _controller!.index == kKnowledgeGraphPage ||
-                  _controller!.index == kCompletePage
-            ? Stack(
-                children: [
-                  // Animated background image (skip for welcome and complete pages)
-                  if (_controller!.index != kWelcomePage && _controller!.index != kCompletePage)
-                    FadeTransition(
-                      opacity: _backgroundFadeAnimation,
-                      child: Container(
-                        height: MediaQuery.of(context).size.height,
-                        decoration: BoxDecoration(
-                          image: DecorationImage(
-                            image: ResizeImage(
-                              AssetImage(_currentBackgroundImage),
-                              width: (MediaQuery.of(context).size.width * MediaQuery.of(context).devicePixelRatio)
-                                  .round(),
-                              height: (MediaQuery.of(context).size.height * MediaQuery.of(context).devicePixelRatio)
-                                  .round(),
-                            ),
-                            fit: BoxFit.cover,
-                          ),
-                        ),
-                      ),
-                    ),
-                  // Page component (no transition for content)
-                  pages[_controller!.index],
-                  // Progress dots (hidden on complete page)
-                  if (_controller!.index != kCompletePage)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 56, 16, 0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: List.generate(9, (index) {
-                          int pageIndex = index + 1; // Name=1, Lang=2, ..., KnowledgeGraph=9
-                          return Container(
-                            margin: const EdgeInsets.symmetric(horizontal: 4.0),
-                            width: pageIndex == _controller!.index ? 12.0 : 8.0,
-                            height: pageIndex == _controller!.index ? 12.0 : 8.0,
+                    _controller!.index == kPrimaryLanguagePage ||
+                    _controller!.index == kFoundOmiPage ||
+                    _controller!.index == kPermissionsPage ||
+                    _controller!.index == kUserReviewPage ||
+                    _controller!.index == kWelcomePage ||
+                    _controller!.index == kSpeechProfilePage ||
+                    _controller!.index == kKnowledgeGraphPage ||
+                    _controller!.index == kCompletePage
+                ? Stack(
+                    children: [
+                      // Animated background image (skip for welcome and complete pages)
+                      if (_controller!.index != kWelcomePage && _controller!.index != kCompletePage)
+                        FadeTransition(
+                          opacity: _backgroundFadeAnimation,
+                          child: Container(
+                            height: MediaQuery.of(context).size.height,
                             decoration: BoxDecoration(
-                              color: pageIndex <= _controller!.index
-                                  ? Theme.of(context).colorScheme.secondary
-                                  : Colors.grey.shade400,
-                              shape: BoxShape.circle,
+                              image: DecorationImage(
+                                image: ResizeImage(
+                                  AssetImage(_currentBackgroundImage),
+                                  width: (MediaQuery.of(context).size.width * MediaQuery.of(context).devicePixelRatio)
+                                      .round(),
+                                  height: (MediaQuery.of(context).size.height * MediaQuery.of(context).devicePixelRatio)
+                                      .round(),
+                                ),
+                                fit: BoxFit.cover,
+                              ),
                             ),
-                          );
-                        }),
-                      ),
-                    ),
-                  // Back button (hidden on complete page)
-                  if (_controller!.index > kNamePage && _controller!.index != kCompletePage)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 40, 0, 0),
-                      child: Align(
-                        alignment: Alignment.topLeft,
-                        child: Container(
-                          width: 36,
-                          height: 36,
-                          margin: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(color: Colors.grey.withOpacity(0.3), shape: BoxShape.circle),
-                          child: IconButton(
-                            padding: EdgeInsets.zero,
-                            onPressed: () {
-                              if (_controller!.index == kSpeechProfilePage) {
-                                _speechProfileProvider?.close();
-                                _controller!.animateTo(kUserReviewPage);
-                              } else if (_controller!.index > kNamePage) {
-                                _controller!.animateTo(_controller!.index - 1);
-                              }
-                            },
-                            icon: const FaIcon(FontAwesomeIcons.arrowLeft, size: 16.0, color: Colors.white),
                           ),
                         ),
-                      ),
-                    ),
-                ],
-              )
-            : SingleChildScrollView(
-                child: Stack(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: ListView(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        children: [
-                          Consumer<OnboardingProvider>(
-                            builder: (context, onboardingProvider, child) {
-                              return DeviceAnimationWidget(
-                                animatedBackground: _controller!.index != -1 && onboardingProvider.isConnected,
-                                isConnected: onboardingProvider.isConnected,
-                                deviceName: onboardingProvider.deviceName,
+                      // Page component (no transition for content)
+                      pages[_controller!.index],
+                      // Progress dots (hidden on complete page)
+                      if (_controller!.index != kCompletePage)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 56, 16, 0),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: List.generate(9, (index) {
+                              int pageIndex = index + 1; // Name=1, Lang=2, ..., KnowledgeGraph=9
+                              return Container(
+                                margin: const EdgeInsets.symmetric(horizontal: 4.0),
+                                width: pageIndex == _controller!.index ? 12.0 : 8.0,
+                                height: pageIndex == _controller!.index ? 12.0 : 8.0,
+                                decoration: BoxDecoration(
+                                  color: pageIndex <= _controller!.index
+                                      ? Theme.of(context).colorScheme.secondary
+                                      : Colors.grey.shade400,
+                                  shape: BoxShape.circle,
+                                ),
                               );
-                            },
+                            }),
                           ),
-                          const SizedBox(height: 24),
-                          kHiddenHeaderPages.contains(_controller?.index)
-                              ? const SizedBox.shrink()
-                              : Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                                  child: Text(
-                                    context.l10n.personalGrowthJourney,
-                                    style: TextStyle(color: Colors.grey.shade300, fontSize: 24),
-                                    textAlign: TextAlign.center,
+                        ),
+                      // Back button (hidden on complete page)
+                      if (_controller!.index > kNamePage && _controller!.index != kCompletePage)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 40, 0, 0),
+                          child: Align(
+                            alignment: Alignment.topLeft,
+                            child: Container(
+                              width: 36,
+                              height: 36,
+                              margin: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(color: Colors.grey.withOpacity(0.3), shape: BoxShape.circle),
+                              child: IconButton(
+                                padding: EdgeInsets.zero,
+                                onPressed: () {
+                                  if (_controller!.index == kSpeechProfilePage) {
+                                    _speechProfileProvider?.close();
+                                    _controller!.animateTo(kUserReviewPage);
+                                  } else if (_controller!.index > kNamePage) {
+                                    _controller!.animateTo(_controller!.index - 1);
+                                  }
+                                },
+                                icon: const FaIcon(FontAwesomeIcons.arrowLeft, size: 16.0, color: Colors.white),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  )
+                : SingleChildScrollView(
+                    child: Stack(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: ListView(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            children: [
+                              Consumer<OnboardingProvider>(
+                                builder: (context, onboardingProvider, child) {
+                                  return DeviceAnimationWidget(
+                                    animatedBackground: _controller!.index != -1 && onboardingProvider.isConnected,
+                                    isConnected: onboardingProvider.isConnected,
+                                    deviceName: onboardingProvider.deviceName,
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 24),
+                              kHiddenHeaderPages.contains(_controller?.index)
+                                  ? const SizedBox.shrink()
+                                  : Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                                      child: Text(
+                                        context.l10n.personalGrowthJourney,
+                                        style: TextStyle(color: Colors.grey.shade300, fontSize: 24),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                              SizedBox(
+                                height:
+                                    (_controller!.index == kFindDevicesPage || _controller!.index == kSpeechProfilePage)
+                                        ? max(
+                                            MediaQuery.of(context).size.height - 500 - 10,
+                                            maxHeightWithTextScale(context, _controller!.index),
+                                          )
+                                        : max(
+                                            MediaQuery.of(context).size.height - 500 - 30,
+                                            maxHeightWithTextScale(context, _controller!.index),
+                                          ),
+                                child: Padding(
+                                  padding: EdgeInsets.only(bottom: MediaQuery.sizeOf(context).height <= 700 ? 10 : 64),
+                                  child: TabBarView(
+                                    controller: _controller,
+                                    physics: const NeverScrollableScrollPhysics(),
+                                    children: pages,
                                   ),
                                 ),
-                          SizedBox(
-                            height: (_controller!.index == kFindDevicesPage || _controller!.index == kSpeechProfilePage)
-                                ? max(
-                                    MediaQuery.of(context).size.height - 500 - 10,
-                                    maxHeightWithTextScale(context, _controller!.index),
-                                  )
-                                : max(
-                                    MediaQuery.of(context).size.height - 500 - 30,
-                                    maxHeightWithTextScale(context, _controller!.index),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (_controller!.index > kNamePage)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 40, 0, 0),
+                            child: Align(
+                              alignment: Alignment.topLeft,
+                              child: Container(
+                                width: 36,
+                                height: 36,
+                                margin: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(color: Colors.grey.withOpacity(0.3), shape: BoxShape.circle),
+                                child: IconButton(
+                                  padding: EdgeInsets.zero,
+                                  onPressed: () {
+                                    if (_controller!.index == kSpeechProfilePage) {
+                                      _speechProfileProvider?.close();
+                                      _controller!.animateTo(kUserReviewPage);
+                                    } else if (_controller!.index > kNamePage) {
+                                      _controller!.animateTo(_controller!.index - 1);
+                                    }
+                                  },
+                                  icon: const FaIcon(FontAwesomeIcons.arrowLeft, size: 16.0, color: Colors.white),
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (_controller!.index != kAuthPage)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 56, 16, 0),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: List.generate(7, (index) {
+                                int pageIndex = index + 1; // Name=1, Lang=2, ..., Speech=7
+                                return Container(
+                                  margin: const EdgeInsets.symmetric(horizontal: 4.0),
+                                  width: pageIndex == _controller!.index ? 12.0 : 8.0,
+                                  height: pageIndex == _controller!.index ? 12.0 : 8.0,
+                                  decoration: BoxDecoration(
+                                    color: pageIndex <= _controller!.index
+                                        ? Theme.of(context).colorScheme.secondary
+                                        : Colors.grey.shade400,
+                                    shape: BoxShape.circle,
                                   ),
-                            child: Padding(
-                              padding: EdgeInsets.only(bottom: MediaQuery.sizeOf(context).height <= 700 ? 10 : 64),
-                              child: TabBarView(
-                                controller: _controller,
-                                physics: const NeverScrollableScrollPhysics(),
-                                children: pages,
-                              ),
+                                );
+                              }),
                             ),
                           ),
-                        ],
-                      ),
+                      ],
                     ),
-                    if (_controller!.index > kNamePage)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 40, 0, 0),
-                        child: Align(
-                          alignment: Alignment.topLeft,
-                          child: Container(
-                            width: 36,
-                            height: 36,
-                            margin: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(color: Colors.grey.withOpacity(0.3), shape: BoxShape.circle),
-                            child: IconButton(
-                              padding: EdgeInsets.zero,
-                              onPressed: () {
-                                if (_controller!.index == kSpeechProfilePage) {
-                                  _speechProfileProvider?.close();
-                                  _controller!.animateTo(kUserReviewPage);
-                                } else if (_controller!.index > kNamePage) {
-                                  _controller!.animateTo(_controller!.index - 1);
-                                }
-                              },
-                              icon: const FaIcon(FontAwesomeIcons.arrowLeft, size: 16.0, color: Colors.white),
-                            ),
-                          ),
-                        ),
-                      ),
-                    if (_controller!.index != kAuthPage)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 56, 16, 0),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: List.generate(7, (index) {
-                            int pageIndex = index + 1; // Name=1, Lang=2, ..., Speech=7
-                            return Container(
-                              margin: const EdgeInsets.symmetric(horizontal: 4.0),
-                              width: pageIndex == _controller!.index ? 12.0 : 8.0,
-                              height: pageIndex == _controller!.index ? 12.0 : 8.0,
-                              decoration: BoxDecoration(
-                                color: pageIndex <= _controller!.index
-                                    ? Theme.of(context).colorScheme.secondary
-                                    : Colors.grey.shade400,
-                                shape: BoxShape.circle,
-                              ),
-                            );
-                          }),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
+                  ),
       ),
     );
   }

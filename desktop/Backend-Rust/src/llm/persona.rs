@@ -147,12 +147,9 @@ impl LlmClient {
 
         // Step 2: Condense memories into personality profile
         let condensation_prompt = MEMORY_CONDENSATION_PROMPT.replace("{memories}", &memories_text);
-        let profile_json = self.call_with_schema(
-            &condensation_prompt,
-            Some(0.7),
-            Some(2000),
-            None,
-        ).await?;
+        let profile_json = self
+            .call_with_schema(&condensation_prompt, Some(0.7), Some(2000), None)
+            .await?;
 
         let profile: CondensedProfile = serde_json::from_str(&profile_json)
             .map_err(|e| format!("Failed to parse profile: {}", e))?;
@@ -171,12 +168,17 @@ impl LlmClient {
         );
 
         // Step 3: Generate the persona system prompt
-        let system_prompt_request = PERSONA_SYSTEM_PROMPT_TEMPLATE.replace("{profile}", &profile_text);
-        let persona_prompt = self.call_text(&system_prompt_request, Some(0.7), Some(1500)).await?;
+        let system_prompt_request =
+            PERSONA_SYSTEM_PROMPT_TEMPLATE.replace("{profile}", &profile_text);
+        let persona_prompt = self
+            .call_text(&system_prompt_request, Some(0.7), Some(1500))
+            .await?;
 
         // Step 4: Generate short description
         let description_request = DESCRIPTION_PROMPT.replace("{profile}", &profile_text);
-        let description = self.call_text(&description_request, Some(0.7), Some(300)).await?;
+        let description = self
+            .call_text(&description_request, Some(0.7), Some(300))
+            .await?;
 
         // Ensure description is within limits
         let description = if description.len() > 250 {

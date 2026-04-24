@@ -8,11 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:marionette_flutter/marionette_flutter.dart';
 
-import 'package:awesome_notifications/awesome_notifications.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_crashlytics/firebase_crashlytics.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart' as ble;
 import 'package:omi/gen/pigeon_communicator.g.dart';
 import 'package:omi/services/bridges/ble_bridge.dart';
@@ -30,8 +25,6 @@ import 'package:omi/core/app_shell.dart';
 import 'package:omi/env/dev_env.dart';
 import 'package:omi/env/env.dart';
 import 'package:omi/env/prod_env.dart';
-import 'package:omi/firebase_options_dev.dart' as dev;
-import 'package:omi/firebase_options_prod.dart' as prod;
 import 'package:omi/flavors.dart';
 import 'package:omi/l10n/app_localizations.dart';
 import 'package:omi/pages/apps/providers/add_app_provider.dart';
@@ -67,55 +60,15 @@ import 'package:omi/providers/voice_recorder_provider.dart';
 import 'package:omi/providers/phone_call_provider.dart';
 import 'package:omi/services/auth_service.dart';
 import 'package:omi/services/notifications.dart';
-import 'package:omi/services/notifications/action_item_notification_handler.dart';
-import 'package:omi/services/notifications/important_conversation_notification_handler.dart';
-import 'package:omi/services/notifications/merge_notification_handler.dart';
 import 'package:omi/services/services.dart';
 import 'package:omi/utils/analytics/growthbook.dart';
 import 'package:omi/utils/debug_log_manager.dart';
-import 'package:omi/utils/debugging/crashlytics_manager.dart';
+import 'package:omi/utils/debugging/crash_reporter_manager.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/utils/environment_detector.dart';
 import 'package:omi/pages/settings/developer.dart';
 import 'package:omi/utils/logger.dart';
 import 'package:omi/utils/platform/platform_manager.dart';
-
-/// Background message handler for FCM data messages
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp();
-
-  await AwesomeNotifications().initialize(null, [
-    NotificationChannel(
-      channelKey: 'channel',
-      channelName: 'Omi Notifications',
-      channelDescription: 'Notification channel for Omi',
-      defaultColor: const Color(0xFF9D50DD),
-      ledColor: Colors.white,
-    ),
-  ]);
-
-  final data = message.data;
-  final messageType = data['type'];
-  const channelKey = 'channel';
-
-  // Handle action item messages
-  if (messageType == 'action_item_reminder') {
-    await ActionItemNotificationHandler.handleReminderMessage(data, channelKey);
-  } else if (messageType == 'action_item_update') {
-    await ActionItemNotificationHandler.handleUpdateMessage(data, channelKey);
-  } else if (messageType == 'action_item_delete') {
-    await ActionItemNotificationHandler.handleDeletionMessage(data);
-  } else if (messageType == 'merge_completed') {
-    await MergeNotificationHandler.handleMergeCompleted(data, channelKey, isAppInForeground: false);
-  } else if (messageType == 'important_conversation') {
-    await ImportantConversationNotificationHandler.handleImportantConversation(
-      data,
-      channelKey,
-      isAppInForeground: false,
-    );
-  }
-}
 
 Future _init() async {
   // Env
@@ -127,36 +80,28 @@ Future _init() async {
 
   FlutterForegroundTask.initCommunicationPort();
 
+  await SharedPreferencesUtil.init();
+
+  final customBackendUrl = SharedPreferencesUtil().customBackendUrl;
+  if (customBackendUrl.isNotEmpty) {
+    Env.overrideApiBaseUrl(customBackendUrl);
+    debugPrint('Using custom backend override ($customBackendUrl)');
+  }
+
   // Service manager
   await ServiceManager.init();
 
-  // Firebase
-  if (Firebase.apps.isEmpty) {
-    final options = F.env == Environment.prod
-        ? prod.DefaultFirebaseOptions.currentPlatform
-        : dev.DefaultFirebaseOptions.currentPlatform;
-    await Firebase.initializeApp(options: options);
-  } else {
-    // Firebase may already be initialized by native SDK (macOS)
-    debugPrint('Firebase already initialized.');
-  }
-
   await PlatformManager.initializeServices();
   await NotificationService.instance.initialize();
-
-  // Register FCM background message handler
-  if (PlatformManager().isFCMSupported) {
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-  }
-
-  await SharedPreferencesUtil.init();
 
   // TestFlight environment detection — must be after SharedPreferencesUtil.init()
   if (F.env == Environment.prod) {
     final isTestFlight = await EnvironmentDetector.isTestFlight();
     if (isTestFlight) {
       Env.isTestFlight = true;
-      if (SharedPreferencesUtil().testFlightUseStagingApi) {
+      if (customBackendUrl.isNotEmpty) {
+        debugPrint('TestFlight detected: custom backend override active ($customBackendUrl)');
+      } else if (SharedPreferencesUtil().testFlightUseStagingApi) {
         final staging = Env.stagingApiUrl;
         if (staging != null) {
           Env.overrideApiBaseUrl(staging);
@@ -170,10 +115,10 @@ Future _init() async {
     }
   }
 
-  // DEBUG: Log Firebase Auth state before getIdToken
-  print('DEBUG main: Before getIdToken - currentUser=${FirebaseAuth.instance.currentUser?.uid}');
+  // DEBUG: Log cached auth state before getIdToken
+  print('DEBUG main: Before getIdToken - cachedUid=${SharedPreferencesUtil().uid}');
   bool isAuth = (await AuthService.instance.getIdToken()) != null;
-  print('DEBUG main: After getIdToken - isAuth=$isAuth, currentUser=${FirebaseAuth.instance.currentUser?.uid}');
+  print('DEBUG main: After getIdToken - isAuth=$isAuth, cachedUid=${SharedPreferencesUtil().uid}');
   if (isAuth) {
     PlatformManager.instance.mixpanel.identify();
     // Restore onboarding state from server if not already set locally
@@ -194,20 +139,21 @@ Future _init() async {
     Logger.debug('main: restored ${peripheralUuids.length} BLE peripherals');
   };
 
-  await CrashlyticsManager.init();
+  await CrashReporterManager.init();
   if (isAuth) {
     PlatformManager.instance.crashReporter.identifyUser(
-      FirebaseAuth.instance.currentUser?.email ?? '',
+      SharedPreferencesUtil().email,
       SharedPreferencesUtil().fullName,
       SharedPreferencesUtil().uid,
     );
   }
   FlutterError.onError = (FlutterErrorDetails details) {
-    FirebaseCrashlytics.instance.recordFlutterFatalError(details);
+    FlutterError.presentError(details);
+    unawaited(CrashReporterManager.instance.reportCrash(details.exception, details.stack ?? StackTrace.empty));
   };
 
   PlatformDispatcher.instance.onError = (error, stack) {
-    FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+    unawaited(CrashReporterManager.instance.reportCrash(error, stack));
     return true;
   };
 
@@ -225,7 +171,7 @@ void main() {
     }
     await _init();
     runApp(const MyApp());
-  }, (error, stack) => FirebaseCrashlytics.instance.recordError(error, stack, fatal: true));
+  }, (error, stack) => unawaited(CrashReporterManager.instance.reportCrash(error, stack)));
 }
 
 class MyApp extends StatefulWidget {
@@ -291,13 +237,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           update: (BuildContext context, value, MessageProvider? previous) =>
               (previous?..updateAppProvider(value)) ?? MessageProvider(),
         ),
-        ChangeNotifierProxyProvider4<
-          ConversationProvider,
-          MessageProvider,
-          PeopleProvider,
-          UsageProvider,
-          CaptureProvider
-        >(
+        ChangeNotifierProxyProvider4<ConversationProvider, MessageProvider, PeopleProvider, UsageProvider,
+            CaptureProvider>(
           create: (context) => CaptureProvider(),
           update: (BuildContext context, conversation, message, people, usage, CaptureProvider? previous) =>
               (previous?..updateProviderInstances(conversation, message, people, usage)) ?? CaptureProvider(),

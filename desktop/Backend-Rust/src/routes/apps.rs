@@ -12,13 +12,13 @@ use std::collections::HashMap;
 
 use crate::auth::AuthUser;
 use crate::models::{
-    App, AppCapabilityDef, AppCategory, AppGroup, AppReview, AppSummary, AppsV2Meta, AppsV2Query,
-    AppsV2Response, CapabilityInfo, ListAppsQuery, PaginationMeta, SearchAppsQuery,
-    SubmitReviewRequest, ToggleAppRequest, ToggleAppResponse, get_app_capabilities,
-    get_app_categories, get_v2_capabilities,
+    get_app_capabilities, get_app_categories, get_v2_capabilities, App, AppCapabilityDef,
+    AppCategory, AppGroup, AppReview, AppSummary, AppsV2Meta, AppsV2Query, AppsV2Response,
+    CapabilityInfo, ListAppsQuery, PaginationMeta, SearchAppsQuery, SubmitReviewRequest,
+    ToggleAppRequest, ToggleAppResponse,
 };
-use crate::AppState;
 use crate::services::redis::RedisService;
+use crate::AppState;
 use std::sync::Arc;
 
 // ============================================================================
@@ -79,13 +79,22 @@ async fn list_apps(
 
     let mut apps = match state
         .firestore
-        .get_apps(&user.uid, query.limit, query.offset, query.capability.as_deref(), query.category.as_deref())
+        .get_apps(
+            &user.uid,
+            query.limit,
+            query.offset,
+            query.capability.as_deref(),
+            query.category.as_deref(),
+        )
         .await
     {
         Ok(apps) => apps,
         Err(e) => {
             tracing::error!("Failed to get apps: {}", e);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get apps: {}", e)));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get apps: {}", e),
+            ));
         }
     };
 
@@ -109,7 +118,10 @@ async fn list_approved_apps(
         Ok(apps) => apps,
         Err(e) => {
             tracing::error!("Failed to get approved apps: {}", e);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get approved apps: {}", e)));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get approved apps: {}", e),
+            ));
         }
     };
 
@@ -128,7 +140,10 @@ async fn list_popular_apps(
         Ok(apps) => apps,
         Err(e) => {
             tracing::error!("Failed to get popular apps: {}", e);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get popular apps: {}", e)));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get popular apps: {}", e),
+            ));
         }
     };
 
@@ -168,7 +183,10 @@ async fn search_apps(
         Ok(apps) => apps,
         Err(e) => {
             tracing::error!("Failed to search apps: {}", e);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to search apps: {}", e)));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to search apps: {}", e),
+            ));
         }
     };
 
@@ -200,7 +218,10 @@ async fn get_apps_v2(
         Ok(apps) => apps,
         Err(e) => {
             tracing::error!("Failed to get apps for v2: {}", e);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get apps: {}", e)));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get apps: {}", e),
+            ));
         }
     };
 
@@ -239,10 +260,16 @@ async fn get_apps_v2(
                         app.installs = installs;
                     }
                 }
-                tracing::debug!("Updated {} apps with installs from Redis", installs_map.len());
+                tracing::debug!(
+                    "Updated {} apps with installs from Redis",
+                    installs_map.len()
+                );
             }
             Err(e) => {
-                tracing::warn!("Failed to fetch installs from Redis: {} - using Firestore values", e);
+                tracing::warn!(
+                    "Failed to fetch installs from Redis: {} - using Firestore values",
+                    e
+                );
             }
         }
 
@@ -272,17 +299,24 @@ async fn get_apps_v2(
                         }
                     }
                 }
-                tracing::debug!("Updated {} apps with ratings from Redis reviews", reviews_map.len());
+                tracing::debug!(
+                    "Updated {} apps with ratings from Redis reviews",
+                    reviews_map.len()
+                );
             }
             Err(e) => {
-                tracing::warn!("Failed to fetch reviews from Redis: {} - ratings may be missing", e);
+                tracing::warn!(
+                    "Failed to fetch reviews from Redis: {} - ratings may be missing",
+                    e
+                );
             }
         }
     } else {
         tracing::debug!("Redis not configured - using installs from Firestore");
     }
 
-    let popular_ids: std::collections::HashSet<_> = popular_apps.iter().map(|a| a.id.clone()).collect();
+    let popular_ids: std::collections::HashSet<_> =
+        popular_apps.iter().map(|a| a.id.clone()).collect();
 
     // Get capabilities for grouping
     let capabilities = get_v2_capabilities();
@@ -329,7 +363,10 @@ async fn get_apps_v2(
         if let Some(cap) = get_app_capability(app) {
             // Skip proactive_notification here (handled in pass 2)
             if cap != "proactive_notification" {
-                grouped.entry(cap).or_insert_with(Vec::new).push(app.clone());
+                grouped
+                    .entry(cap)
+                    .or_insert_with(Vec::new)
+                    .push(app.clone());
             }
         }
     }
@@ -421,12 +458,17 @@ fn compute_app_score(app: &AppSummary) -> f64 {
 /// - Simple integrations (external_integration WITHOUT auth_steps, chat, or memories)
 fn is_notification_app(app: &AppSummary) -> bool {
     // Case 1: Has proactive_notification capability
-    if app.capabilities.contains(&"proactive_notification".to_string()) {
+    if app
+        .capabilities
+        .contains(&"proactive_notification".to_string())
+    {
         return true;
     }
 
     // Case 2: Simple integration (external_integration WITHOUT auth_steps, chat, or memories)
-    let has_external = app.capabilities.contains(&"external_integration".to_string());
+    let has_external = app
+        .capabilities
+        .contains(&"external_integration".to_string());
     has_external
         && !app.has_auth_steps
         && !app.capabilities.contains(&"chat".to_string())
@@ -436,7 +478,9 @@ fn is_notification_app(app: &AppSummary) -> bool {
 /// Determine the primary capability section for an app (matching Python backend logic)
 /// Priority: notification apps -> external_integration (with auth) -> chat -> memories
 fn get_app_capability(app: &AppSummary) -> Option<String> {
-    let has_external = app.capabilities.contains(&"external_integration".to_string());
+    let has_external = app
+        .capabilities
+        .contains(&"external_integration".to_string());
 
     // First: notification apps (including simple integrations without auth_steps)
     if is_notification_app(app) {
@@ -484,7 +528,10 @@ async fn get_app_details(
         Ok(None) => return Err((StatusCode::NOT_FOUND, "App not found".to_string())),
         Err(e) => {
             tracing::error!("Failed to get app: {}", e);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get app: {}", e)));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get app: {}", e),
+            ));
         }
     };
 
@@ -527,7 +574,10 @@ async fn get_app_reviews(
         Ok(reviews) => Ok(Json(reviews)),
         Err(e) => {
             tracing::error!("Failed to get reviews: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get reviews: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get reviews: {}", e),
+            ))
         }
     }
 }
@@ -551,7 +601,10 @@ async fn enable_app(
         })),
         Err(e) => {
             tracing::error!("Failed to enable app: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to enable app: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to enable app: {}", e),
+            ))
         }
     }
 }
@@ -564,14 +617,21 @@ async fn disable_app(
 ) -> Result<Json<ToggleAppResponse>, (StatusCode, String)> {
     tracing::info!("Disabling app {} for user {}", request.app_id, user.uid);
 
-    match state.firestore.disable_app(&user.uid, &request.app_id).await {
+    match state
+        .firestore
+        .disable_app(&user.uid, &request.app_id)
+        .await
+    {
         Ok(_) => Ok(Json(ToggleAppResponse {
             success: true,
             message: "App disabled successfully".to_string(),
         })),
         Err(e) => {
             tracing::error!("Failed to disable app: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to disable app: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to disable app: {}", e),
+            ))
         }
     }
 }
@@ -587,7 +647,10 @@ async fn get_enabled_apps(
         Ok(apps) => apps,
         Err(e) => {
             tracing::error!("Failed to get enabled apps: {}", e);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get enabled apps: {}", e)));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get enabled apps: {}", e),
+            ));
         }
     };
 
@@ -614,7 +677,10 @@ async fn submit_review(
 
     // Validate score
     if request.score < 1 || request.score > 5 {
-        return Err((StatusCode::BAD_REQUEST, "Score must be between 1 and 5".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Score must be between 1 and 5".to_string(),
+        ));
     }
 
     match state
@@ -625,7 +691,10 @@ async fn submit_review(
         Ok(review) => Ok(Json(review)),
         Err(e) => {
             tracing::error!("Failed to submit review: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to submit review: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to submit review: {}", e),
+            ))
         }
     }
 }
@@ -635,9 +704,7 @@ async fn submit_review(
 // ============================================================================
 
 /// GET /v1/app-categories - Get all app categories
-async fn list_categories(
-    _user: AuthUser,
-) -> Result<Json<Vec<AppCategory>>, (StatusCode, String)> {
+async fn list_categories(_user: AuthUser) -> Result<Json<Vec<AppCategory>>, (StatusCode, String)> {
     Ok(Json(get_app_categories()))
 }
 

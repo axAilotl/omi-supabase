@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'package:firebase_auth/firebase_auth.dart';
-
 import 'package:omi/backend/preferences.dart';
 import 'package:omi/services/auth_service.dart';
 import 'package:omi/utils/alerts/app_snackbar.dart';
@@ -16,12 +14,12 @@ class ChangeNameWidget extends StatefulWidget {
 
 class _ChangeNameWidgetState extends State<ChangeNameWidget> {
   late TextEditingController nameController;
-  User? user;
+  AppAuthUser? user;
   bool isSaving = false;
 
   @override
   void initState() {
-    user = AuthService.instance.getFirebaseUser();
+    user = AuthService.instance.getCurrentUser();
     nameController = TextEditingController(
       text: SharedPreferencesUtil().givenName.isNotEmpty ? SharedPreferencesUtil().givenName : user?.displayName ?? '',
     );

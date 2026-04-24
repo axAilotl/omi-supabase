@@ -85,7 +85,11 @@ async fn gemini_proxy(
     // Validate the action is in our allowlist
     let action = extract_gemini_action(&path);
     if !is_gemini_action_allowed(action) {
-        tracing::warn!("gemini_proxy: blocked action '{}' in path '{}'", action, path);
+        tracing::warn!(
+            "gemini_proxy: blocked action '{}' in path '{}'",
+            action,
+            path
+        );
         return Err(ProxyError::Status(StatusCode::FORBIDDEN));
     }
 
@@ -104,7 +108,10 @@ async fn gemini_proxy(
     })?;
 
     // Rate limit check
-    let decision = state.gemini_rate_limiter.check_and_record(&user.uid, state.redis.as_ref()).await;
+    let decision = state
+        .gemini_rate_limiter
+        .check_and_record(&user.uid, state.redis.as_ref())
+        .await;
     if decision == RateDecision::Reject {
         tracing::warn!("gemini_proxy: rate limit rejected uid={}", user.uid);
         return Err(ProxyError::RateLimited);
@@ -170,7 +177,11 @@ async fn gemini_stream_proxy(
     // Validate the model is in our allowlist (issue #6624)
     let model = extract_gemini_model(&path);
     if !is_gemini_model_allowed(model) {
-        tracing::warn!("gemini_stream_proxy: blocked model '{}' in path '{}'", model, path);
+        tracing::warn!(
+            "gemini_stream_proxy: blocked model '{}' in path '{}'",
+            model,
+            path
+        );
         return Err(ProxyError::Status(StatusCode::FORBIDDEN));
     }
 
@@ -181,7 +192,10 @@ async fn gemini_stream_proxy(
     })?;
 
     // Rate limit check
-    let decision = state.gemini_rate_limiter.check_and_record(&user.uid, state.redis.as_ref()).await;
+    let decision = state
+        .gemini_rate_limiter
+        .check_and_record(&user.uid, state.redis.as_ref())
+        .await;
     if decision == RateDecision::Reject {
         tracing::warn!("gemini_stream_proxy: rate limit rejected uid={}", user.uid);
         return Err(ProxyError::RateLimited);
@@ -323,12 +337,13 @@ async fn deepgram_ws_proxy(
     let query = original_uri.query().unwrap_or("").to_string();
     let upstream_url = build_deepgram_ws_url(&query);
 
-    Ok(ws.on_upgrade(move |client_socket| async move {
-        if let Err(e) = proxy_ws_bidirectional(client_socket, &upstream_url, &dg_key).await {
-            tracing::error!("deepgram_ws_proxy: proxy error: {}", e);
-        }
-    })
-    .into_response())
+    Ok(ws
+        .on_upgrade(move |client_socket| async move {
+            if let Err(e) = proxy_ws_bidirectional(client_socket, &upstream_url, &dg_key).await {
+                tracing::error!("deepgram_ws_proxy: proxy error: {}", e);
+            }
+        })
+        .into_response())
 }
 
 /// Which side of the proxy terminated first
@@ -470,10 +485,11 @@ fn is_gemini_model_allowed(model: &str) -> bool {
 ///   - Skip generation-specific validation (different schema)
 ///   - Strip safety_settings and cached_content only
 fn sanitize_gemini_body(body: &[u8], action: &str) -> Result<Vec<u8>, String> {
-    let mut json: serde_json::Value = serde_json::from_slice(body)
-        .map_err(|e| format!("invalid JSON: {}", e))?;
+    let mut json: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| format!("invalid JSON: {}", e))?;
 
-    let obj = json.as_object_mut()
+    let obj = json
+        .as_object_mut()
         .ok_or_else(|| "request body must be a JSON object".to_string())?;
 
     // Strip dangerous fields from all request types
@@ -504,7 +520,10 @@ fn sanitize_gemini_body(body: &[u8], action: &str) -> Result<Vec<u8>, String> {
         };
 
         // Reject top-level candidate_count > 1
-        if let Some(cc) = obj.get("candidate_count").or_else(|| obj.get("candidateCount")) {
+        if let Some(cc) = obj
+            .get("candidate_count")
+            .or_else(|| obj.get("candidateCount"))
+        {
             if let Some(n) = parse_as_u64(cc) {
                 if n > 1 {
                     return Err(format!("candidate_count must be 1 or absent, got {}", n));
@@ -522,7 +541,10 @@ fn sanitize_gemini_body(body: &[u8], action: &str) -> Result<Vec<u8>, String> {
                     if let Some(v) = gc.get(*cc_key) {
                         if let Some(n) = parse_as_u64(v) {
                             if n > 1 {
-                                return Err(format!("candidate_count must be 1 or absent, got {}", n));
+                                return Err(format!(
+                                    "candidate_count must be 1 or absent, got {}",
+                                    n
+                                ));
                             }
                         }
                     }
@@ -596,10 +618,7 @@ pub fn proxy_routes() -> Router<AppState> {
         // Deepgram batch (pre-recorded) transcription proxy
         .route("/v1/proxy/deepgram/v1/listen", post(deepgram_listen_proxy))
         // Deepgram streaming WebSocket proxy
-        .route(
-            "/v1/proxy/deepgram/ws/v1/listen",
-            any(deepgram_ws_proxy),
-        )
+        .route("/v1/proxy/deepgram/ws/v1/listen", any(deepgram_ws_proxy))
         // Issue #6624: 5 MB body size limit for proxy routes only (not global).
         // Normal app payloads are 300-600 KB; 5 MB gives ~8x headroom.
         .layer(DefaultBodyLimit::max(GEMINI_MAX_BODY_SIZE))
@@ -722,7 +741,10 @@ mod tests {
 
     #[test]
     fn model_allowlist_blocks_unknown() {
-        assert!(!is_gemini_model_allowed("gemini-pro-latest"), "pro removed from allowlist");
+        assert!(
+            !is_gemini_model_allowed("gemini-pro-latest"),
+            "pro removed from allowlist"
+        );
         assert!(!is_gemini_model_allowed("gemini-2.5-pro"));
         assert!(!is_gemini_model_allowed("gemini-1.5-pro"));
         assert!(!is_gemini_model_allowed("gemini-ultra"));
@@ -746,7 +768,8 @@ mod tests {
         let result = sanitize_gemini_body(
             serde_json::to_vec(&body).unwrap().as_slice(),
             "generateContent",
-        ).unwrap();
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert_eq!(
             parsed["generation_config"]["max_output_tokens"],
@@ -763,7 +786,8 @@ mod tests {
         let result = sanitize_gemini_body(
             serde_json::to_vec(&body).unwrap().as_slice(),
             "generateContent",
-        ).unwrap();
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert_eq!(parsed["generation_config"]["max_output_tokens"], 4096);
     }
@@ -777,7 +801,8 @@ mod tests {
         let result = sanitize_gemini_body(
             serde_json::to_vec(&body).unwrap().as_slice(),
             "generateContent",
-        ).unwrap();
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert_eq!(
             parsed["generationConfig"]["maxOutputTokens"],
@@ -880,7 +905,8 @@ mod tests {
         let result = sanitize_gemini_body(
             serde_json::to_vec(&body).unwrap().as_slice(),
             "generateContent",
-        ).unwrap();
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert_eq!(parsed["generation_config"]["max_output_tokens"], 100);
         assert_eq!(
@@ -914,7 +940,8 @@ mod tests {
         let result = sanitize_gemini_body(
             serde_json::to_vec(&body).unwrap().as_slice(),
             "generateContent",
-        ).unwrap();
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert_eq!(
             parsed["generationConfig"]["maxOutputTokens"],
@@ -962,7 +989,8 @@ mod tests {
         let result = sanitize_gemini_body(
             serde_json::to_vec(&body).unwrap().as_slice(),
             "generateContent",
-        ).unwrap();
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert_eq!(
             parsed["generationConfig"]["maxOutputTokens"],
@@ -1001,7 +1029,8 @@ mod tests {
         let result = sanitize_gemini_body(
             serde_json::to_vec(&body).unwrap().as_slice(),
             "generateContent",
-        ).unwrap();
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert!(parsed.get("safety_settings").is_none());
         assert!(parsed.get("safetySettings").is_none());
@@ -1016,7 +1045,8 @@ mod tests {
         let result = sanitize_gemini_body(
             serde_json::to_vec(&body).unwrap().as_slice(),
             "generateContent",
-        ).unwrap();
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert!(parsed.get("cachedContent").is_none());
         assert!(parsed.get("cached_content").is_none());
@@ -1032,7 +1062,8 @@ mod tests {
         let result = sanitize_gemini_body(
             serde_json::to_vec(&body).unwrap().as_slice(),
             "generateContent",
-        ).unwrap();
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert!(parsed.get("tools").is_some());
     }
@@ -1063,7 +1094,8 @@ mod tests {
         let result = sanitize_gemini_body(
             serde_json::to_vec(&body).unwrap().as_slice(),
             "embedContent",
-        ).unwrap();
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert!(parsed.get("safetySettings").is_none());
     }
@@ -1107,11 +1139,8 @@ mod tests {
     #[test]
     fn gemini_stream_url_empty_params() {
         let params = std::collections::HashMap::new();
-        let url = build_gemini_stream_url(
-            "models/gemini-3-flash:generateContent",
-            "key-789",
-            &params,
-        );
+        let url =
+            build_gemini_stream_url("models/gemini-3-flash:generateContent", "key-789", &params);
         assert_eq!(
             url,
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent?key=key-789"
@@ -1214,7 +1243,11 @@ mod tests {
         assert_eq!(debug_strs.len(), 4);
         // All distinct
         let unique: std::collections::HashSet<&String> = debug_strs.iter().collect();
-        assert_eq!(unique.len(), 4, "All ProxyCloseOrigin variants should have distinct Debug output");
+        assert_eq!(
+            unique.len(),
+            4,
+            "All ProxyCloseOrigin variants should have distinct Debug output"
+        );
         // Verify expected names
         assert!(debug_strs.contains(&"ClientClosed".to_string()));
         assert!(debug_strs.contains(&"UpstreamClosed".to_string()));

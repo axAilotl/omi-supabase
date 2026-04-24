@@ -9,8 +9,8 @@ import 'package:omi/backend/schema/message.dart';
 import 'package:omi/services/notifications/notification_interface.dart';
 import 'package:omi/utils/logger.dart';
 
-/// Basic notification service for platforms without Firebase Messaging support
-/// Currently used for Windows - provides local notifications only
+/// Basic notification service for local/self-hosted deployments.
+/// Provides local notifications only and skips remote push registration.
 class _BasicNotificationService implements NotificationInterface {
   _BasicNotificationService._();
 
@@ -28,7 +28,7 @@ class _BasicNotificationService implements NotificationInterface {
   @override
   Future<void> initialize() async {
     await _initializeAwesomeNotifications();
-    Logger.debug('Basic notification service initialized (Firebase Messaging not available on this platform)');
+    Logger.debug('Basic notification service initialized (remote push disabled)');
   }
 
   Future<void> _initializeAwesomeNotifications() async {
@@ -109,14 +109,12 @@ class _BasicNotificationService implements NotificationInterface {
 
   @override
   Future<void> saveFcmToken(String? token) async {
-    // Firebase Cloud Messaging not supported on this platform
-    Logger.debug('FCM token save skipped - Firebase Messaging not supported on this platform');
+    Logger.debug('Notification token save skipped - remote push disabled');
   }
 
   @override
   void saveNotificationToken() {
-    // Firebase Cloud Messaging not supported on this platform
-    Logger.debug('Notification token save skipped - Firebase Messaging not supported on this platform');
+    Logger.debug('Notification token save skipped - remote push disabled');
   }
 
   @override
@@ -143,9 +141,7 @@ class _BasicNotificationService implements NotificationInterface {
 
   @override
   Future<void> listenForMessages() async {
-    // Firebase Cloud Messaging not supported on this platform
-    // Local notifications still work, but no remote messaging
-    Logger.debug('Firebase message listening not available on this platform');
+    Logger.debug('Remote message listener disabled for local notification service');
   }
 
   final _serverMessageStreamController = StreamController<ServerMessage>.broadcast();

@@ -271,12 +271,12 @@ actor AgentVMService {
     /// Start incremental sync after VM is confirmed ready.
     private func startIncrementalSync(vmIP: String, authToken: String) async {
         await AgentSyncService.shared.start(vmIP: vmIP, authToken: authToken)
-        // Send Firebase token so the VM can call backend tools
-        await sendFirebaseToken(vmIP: vmIP, authToken: authToken)
+        // Send the user's access token so the VM can call backend tools.
+        await sendAccessToken(vmIP: vmIP, authToken: authToken)
     }
 
-    /// Send the user's Firebase ID token to the VM so it can call Python backend tools.
-    private func sendFirebaseToken(vmIP: String, authToken: String) async {
+    /// Send the user's access token to the VM so it can call backend tools.
+    private func sendAccessToken(vmIP: String, authToken: String) async {
         do {
             let idToken = try await AuthService.shared.getIdToken()
             // Send token both as query param (backward compat) and header (preferred)
@@ -287,7 +287,7 @@ actor AgentVMService {
             request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
             request.timeoutInterval = 15
 
-            let body: [String: String] = ["firebaseToken": idToken]
+            let body: [String: String] = ["accessToken": idToken]
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -296,16 +296,16 @@ actor AgentVMService {
             if httpResponse.statusCode == 200 {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let toolCount = json["toolsRegistered"] as? Int {
-                    log("AgentVMService: Firebase token sent to VM (\(toolCount) backend tools registered)")
+                    log("AgentVMService: Access token sent to VM (\(toolCount) backend tools registered)")
                 } else {
-                    log("AgentVMService: Firebase token sent to VM")
+                    log("AgentVMService: Access token sent to VM")
                 }
             } else {
                 let body = String(data: data, encoding: .utf8) ?? ""
-                log("AgentVMService: Failed to send Firebase token — HTTP \(httpResponse.statusCode): \(body)")
+                log("AgentVMService: Failed to send access token — HTTP \(httpResponse.statusCode): \(body)")
             }
         } catch {
-            log("AgentVMService: Failed to send Firebase token — \(error.localizedDescription)")
+            log("AgentVMService: Failed to send access token — \(error.localizedDescription)")
         }
     }
 

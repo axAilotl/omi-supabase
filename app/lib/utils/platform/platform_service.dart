@@ -14,7 +14,7 @@ class PlatformService {
   static bool get isIntercomSupported => true;
   static bool get isMixpanelSupported => !(kIsWeb);
   static bool get isMixpanelNativelySupported => isAndroid || isIOS;
-  static bool get isCrashlyticsSupported => true;
+  static bool get isCrashReportingSupported => false;
 
   /// Execute a function only if the platform supports it
   static T? executeIfSupported<T>(bool isSupported, T Function() function, {T? fallback}) {

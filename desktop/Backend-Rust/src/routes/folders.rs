@@ -8,11 +8,11 @@ use axum::{
 };
 use serde::Serialize;
 
+use crate::auth::AuthUser;
 use crate::models::{
     BulkMoveRequest, BulkMoveResponse, CreateFolderRequest, DeleteFolderQuery, Folder,
     MoveToFolderRequest, ReorderFoldersRequest, UpdateFolderRequest,
 };
-use crate::auth::AuthUser;
 use crate::AppState;
 
 /// Status response for operations

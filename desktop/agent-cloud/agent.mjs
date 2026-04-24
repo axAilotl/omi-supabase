@@ -1166,7 +1166,7 @@ function startServer() {
       return;
     }
 
-    // Auth endpoint — receives Firebase token from desktop app
+    // Auth endpoint — receives the user's backend access token from the proxy/desktop app
     if (req.url?.startsWith("/auth") && req.method === "POST") {
       if (!verifyAuth(req)) {
         res.writeHead(401, { "Content-Type": "application/json" });
@@ -1179,17 +1179,17 @@ function startServer() {
       req.on("end", async () => {
         try {
           const payload = JSON.parse(body);
-          const { firebaseToken } = payload;
-          if (!firebaseToken) {
+          const accessToken = payload?.accessToken ?? payload?.firebaseToken;
+          if (!accessToken) {
             res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Missing firebaseToken" }));
+            res.end(JSON.stringify({ error: "Missing accessToken" }));
             return;
           }
 
           const isFirst = userFirebaseToken === null;
-          userFirebaseToken = firebaseToken;
+          userFirebaseToken = accessToken;
           lastActivityAt = Date.now();
-          log(`Firebase token ${isFirst ? "received" : "refreshed"}`);
+          log(`User access token ${isFirst ? "received" : "refreshed"}`);
 
           // On first token, fetch backend tools
           if (isFirst) {

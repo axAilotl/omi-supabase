@@ -10,7 +10,12 @@ use axum::{
 use serde::Deserialize;
 
 use crate::auth::AuthUser;
-use crate::models::{AcceptTasksRequest, AcceptTasksResponse, ActionItemDB, ActionItemsListResponse, ActionItemStatusResponse, BatchCreateActionItemsRequest, BatchUpdateScoresRequest, BatchUpdateSortOrdersRequest, CreateActionItemRequest, ShareTasksRequest, ShareTasksResponse, SharedTaskInfo, SharedTasksResponse, UpdateActionItemRequest};
+use crate::models::{
+    AcceptTasksRequest, AcceptTasksResponse, ActionItemDB, ActionItemStatusResponse,
+    ActionItemsListResponse, BatchCreateActionItemsRequest, BatchUpdateScoresRequest,
+    BatchUpdateSortOrdersRequest, CreateActionItemRequest, ShareTasksRequest, ShareTasksResponse,
+    SharedTaskInfo, SharedTasksResponse, UpdateActionItemRequest,
+};
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -137,7 +142,10 @@ async fn get_action_items(
         }
         Err(e) => {
             tracing::error!("Failed to get action items: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get action items: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get action items: {}", e),
+            ))
         }
     }
 }
@@ -150,7 +158,11 @@ async fn get_action_item_by_id(
 ) -> Result<Json<ActionItemDB>, StatusCode> {
     tracing::info!("Getting action item {} for user {}", item_id, user.uid);
 
-    match state.firestore.get_action_item_by_id(&user.uid, &item_id).await {
+    match state
+        .firestore
+        .get_action_item_by_id(&user.uid, &item_id)
+        .await
+    {
         Ok(Some(item)) => Ok(Json(item)),
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
@@ -257,7 +269,11 @@ async fn batch_update_sort_orders(
         .map(|s| (s.id, s.sort_order, s.indent_level))
         .collect();
 
-    match state.firestore.batch_update_sort_orders(&user.uid, &items).await {
+    match state
+        .firestore
+        .batch_update_sort_orders(&user.uid, &items)
+        .await
+    {
         Ok(()) => Ok(Json(ActionItemStatusResponse {
             status: "ok".to_string(),
         })),
@@ -276,7 +292,11 @@ async fn delete_action_item(
 ) -> Result<Json<ActionItemStatusResponse>, StatusCode> {
     tracing::info!("Deleting action item {} for user {}", item_id, user.uid);
 
-    match state.firestore.delete_action_item(&user.uid, &item_id).await {
+    match state
+        .firestore
+        .delete_action_item(&user.uid, &item_id)
+        .await
+    {
         Ok(()) => Ok(Json(ActionItemStatusResponse {
             status: "ok".to_string(),
         })),
@@ -342,7 +362,11 @@ async fn batch_update_scores(
         .map(|s| (s.id, s.relevance_score))
         .collect();
 
-    match state.firestore.batch_update_scores(&user.uid, &scores).await {
+    match state
+        .firestore
+        .batch_update_scores(&user.uid, &scores)
+        .await
+    {
         Ok(()) => Ok(Json(ActionItemStatusResponse {
             status: "ok".to_string(),
         })),
@@ -387,7 +411,10 @@ async fn share_tasks(
     let token = uuid::Uuid::new_v4().simple().to_string();
 
     if let Some(redis) = &state.redis {
-        if let Err(e) = redis.store_task_share(&token, &user.uid, &display_name, &request.task_ids).await {
+        if let Err(e) = redis
+            .store_task_share(&token, &user.uid, &display_name, &request.task_ids)
+            .await
+        {
             tracing::error!("Failed to store task share in Redis: {}", e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
@@ -397,7 +424,12 @@ async fn share_tasks(
     }
 
     let url = format!("https://h.omi.me/tasks/{}", token);
-    tracing::info!("User {} shared {} tasks, token={}", user.uid, task_count, token);
+    tracing::info!(
+        "User {} shared {} tasks, token={}",
+        user.uid,
+        task_count,
+        token
+    );
 
     Ok(Json(ShareTasksResponse { url, token }))
 }
@@ -407,7 +439,10 @@ async fn get_shared_tasks(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> Result<Json<SharedTasksResponse>, StatusCode> {
-    let redis = state.redis.as_ref().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let redis = state
+        .redis
+        .as_ref()
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let (sender_uid, sender_name, task_ids) = match redis.get_task_share(&token).await {
         Ok(Some(data)) => data,
@@ -448,7 +483,10 @@ async fn accept_tasks(
     user: AuthUser,
     Json(request): Json<AcceptTasksRequest>,
 ) -> Result<Json<AcceptTasksResponse>, StatusCode> {
-    let redis = state.redis.as_ref().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let redis = state
+        .redis
+        .as_ref()
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let (sender_uid, _sender_name, task_ids) = match redis.get_task_share(&request.token).await {
         Ok(Some(data)) => data,
@@ -466,7 +504,7 @@ async fn accept_tasks(
 
     // Atomic accept — prevent double-accept
     match redis.try_accept_task_share(&request.token, &user.uid).await {
-        Ok(true) => {} // newly accepted
+        Ok(true) => {}                                 // newly accepted
         Ok(false) => return Err(StatusCode::CONFLICT), // already accepted
         Err(e) => {
             tracing::error!("Failed to accept task share: {}", e);
@@ -528,15 +566,26 @@ async fn accept_tasks(
 
 pub fn action_items_routes() -> Router<AppState> {
     Router::new()
-        .route("/v1/action-items", get(get_action_items).post(create_action_item))
-        .route("/v1/action-items/batch", axum::routing::post(batch_create_action_items).patch(batch_update_sort_orders))
-        .route("/v1/action-items/batch-scores", axum::routing::patch(batch_update_scores))
+        .route(
+            "/v1/action-items",
+            get(get_action_items).post(create_action_item),
+        )
+        .route(
+            "/v1/action-items/batch",
+            axum::routing::post(batch_create_action_items).patch(batch_update_sort_orders),
+        )
+        .route(
+            "/v1/action-items/batch-scores",
+            axum::routing::patch(batch_update_scores),
+        )
         .route("/v1/action-items/share", axum::routing::post(share_tasks))
         .route("/v1/action-items/shared/:token", get(get_shared_tasks))
         .route("/v1/action-items/accept", axum::routing::post(accept_tasks))
         .route(
             "/v1/action-items/:id",
-            get(get_action_item_by_id).patch(update_action_item).delete(delete_action_item),
+            get(get_action_item_by_id)
+                .patch(update_action_item)
+                .delete(delete_action_item),
         )
         .route(
             "/v1/action-items/:id/soft-delete",

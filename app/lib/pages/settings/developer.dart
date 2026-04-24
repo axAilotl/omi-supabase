@@ -31,6 +31,7 @@ import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/debug_log_manager.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/utils/logger.dart';
+import 'package:omi/utils/other/validators.dart';
 
 class DeveloperSettingsPage extends StatefulWidget {
   const DeveloperSettingsPage({super.key});
@@ -40,12 +41,70 @@ class DeveloperSettingsPage extends StatefulWidget {
 }
 
 class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
+  late final TextEditingController _backendUrlController;
+
   @override
   void initState() {
+    _backendUrlController = TextEditingController(
+      text: SharedPreferencesUtil().customBackendUrl.isNotEmpty
+          ? SharedPreferencesUtil().customBackendUrl
+          : (Env.defaultApiBaseUrl ?? ''),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       context.read<McpProvider>().fetchKeys();
     });
     super.initState();
+  }
+
+  @override
+  void dispose() {
+    _backendUrlController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveCustomBackendUrl() async {
+    final url = _backendUrlController.text.trim();
+    if (url.isEmpty) {
+      AppSnackbar.showSnackbarError(context.l10n.enterBackendUrlError);
+      return;
+    }
+    if (!url.endsWith('/')) {
+      AppSnackbar.showSnackbarError(context.l10n.urlMustEndWithSlashError);
+      return;
+    }
+
+    final parsedUrl = Uri.tryParse(url);
+    if (!isValidUrl(url) ||
+        parsedUrl == null ||
+        !parsedUrl.isAbsolute ||
+        parsedUrl.host.isEmpty ||
+        (parsedUrl.scheme != 'http' && parsedUrl.scheme != 'https')) {
+      AppSnackbar.showSnackbarError(context.l10n.invalidUrlError);
+      return;
+    }
+
+    await SharedPreferencesUtil().setCustomBackendUrl(url);
+    if (!mounted) return;
+
+    setState(() {
+      _backendUrlController.text = url;
+      _backendUrlController.selection = TextSelection.fromPosition(
+        TextPosition(offset: _backendUrlController.text.length),
+      );
+    });
+    AppSnackbar.showSnackbar(context.l10n.apiEnvSavedRestartRequired, duration: const Duration(seconds: 5));
+  }
+
+  Future<void> _resetCustomBackendUrl() async {
+    await SharedPreferencesUtil().clearCustomBackendUrl();
+    if (!mounted) return;
+
+    final fallbackUrl = Env.defaultApiBaseUrl ?? '';
+    setState(() {
+      _backendUrlController.text = fallbackUrl;
+      _backendUrlController.selection = TextSelection.fromPosition(TextPosition(offset: fallbackUrl.length));
+    });
+    AppSnackbar.showSnackbar(context.l10n.apiEnvSavedRestartRequired, duration: const Duration(seconds: 5));
   }
 
   Widget _buildSectionContainer({required List<Widget> children}) {
@@ -200,6 +259,92 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildBackendUrlSection() {
+    final effectiveUrl = Env.apiBaseUrl ?? '';
+    final hasCustomBackendUrl = SharedPreferencesUtil().customBackendUrl.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionHeader(context.l10n.customBackendUrlTitle, subtitle: context.l10n.switchRequiresRestart),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(14)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildTextField(
+                controller: _backendUrlController,
+                label: context.l10n.backendUrlLabel,
+                hint: Env.defaultApiBaseUrl,
+                keyboardType: TextInputType.url,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: _saveCustomBackendUrl,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2A2A2E),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Center(
+                          child: Text(
+                            context.l10n.saveUrlButton,
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: hasCustomBackendUrl ? _resetCustomBackendUrl : null,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          color:
+                              hasCustomBackendUrl ? const Color(0xFF2A2A2E) : const Color(0xFF2A2A2E).withOpacity(0.5),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Center(
+                          child: Text(
+                            context.l10n.resetToDefault,
+                            style: TextStyle(
+                              color: hasCustomBackendUrl ? Colors.white : Colors.grey.shade600,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${context.l10n.current}: ',
+                    style: TextStyle(color: Colors.grey.shade500, fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                  Expanded(
+                    child: Text(effectiveUrl, style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -1641,6 +1786,9 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                       ],
                     ),
                   ),
+
+                  const SizedBox(height: 32),
+                  _buildBackendUrlSection(),
 
                   // API Environment Section (TestFlight only, requires STAGING_API_URL env var)
                   if (Env.isTestFlight && Env.isStagingConfigured) ...[

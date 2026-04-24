@@ -17,6 +17,9 @@ import 'package:omi/utils/logger.dart';
 import 'package:omi/utils/wal_file_manager.dart';
 
 class LocalWalSyncImpl implements LocalWalSync {
+  static const int _sessionAssociationGraceSeconds = 120;
+  static const int _orphanRetryCooldownSeconds = 300;
+
   List<Wal> _wals = const [];
 
   List<WalFrame> _frames = [];
@@ -46,6 +49,28 @@ class LocalWalSyncImpl implements LocalWalSync {
   SyncLocalFilesResponse? get accumulatedResponse => _accumulatedResponse;
 
   LocalWalSyncImpl(this.listener);
+
+  bool _isPendingUploadStatus(WalStatus status) => status == WalStatus.miss || status == WalStatus.corrupted;
+
+  bool _canRetryPendingWal(Wal wal, int nowSeconds) {
+    if (wal.retryCount < 3) return true;
+    if (wal.lastRetryAt <= 0) return true;
+    return nowSeconds - wal.lastRetryAt >= _orphanRetryCooldownSeconds;
+  }
+
+  bool _walOverlapsSession(Wal wal, int sessionStartSeconds, int nowSeconds) {
+    final sessionStart = sessionStartSeconds - _sessionAssociationGraceSeconds;
+    final sessionEnd = nowSeconds + _sessionAssociationGraceSeconds;
+    final walEnd = wal.timerStart + (wal.seconds > 0 ? wal.seconds : 1);
+    return walEnd >= sessionStart && wal.timerStart <= sessionEnd;
+  }
+
+  bool _hasUnsyncedFrame(int low, int high) {
+    for (var i = low; i < high; i++) {
+      if (!_frameSynced[i]) return true;
+    }
+    return false;
+  }
 
   @visibleForTesting
   List<WalFrame> get testFrames => _frames;
@@ -156,7 +181,6 @@ class LocalWalSyncImpl implements LocalWalSync {
       return;
     }
 
-    var lossesThreshold = 10 * _framesPerSecond;
     var timerEnd = DateTime.now().millisecondsSinceEpoch ~/ 1000 - newFrameSyncDelaySeconds;
     var pivot = _frames.length - newFrameSyncDelaySeconds * _framesPerSecond;
     if (pivot <= 0) {
@@ -171,19 +195,7 @@ class LocalWalSyncImpl implements LocalWalSync {
 
     bool shouldStored = SharedPreferencesUtil().unlimitedLocalStorageEnabled;
     if (!shouldStored) {
-      bool synced = true;
-      var losses = 0;
-      for (var i = low; i < high; i++) {
-        if (!_frameSynced[i]) {
-          losses++;
-          if (losses >= lossesThreshold) {
-            synced = false;
-            break;
-          }
-        }
-      }
-
-      shouldStored = (synced == false);
+      shouldStored = _hasUnsyncedFrame(low, high);
     }
 
     if (shouldStored) {
@@ -316,7 +328,7 @@ class LocalWalSyncImpl implements LocalWalSync {
 
   @override
   Future<List<Wal>> getMissingWals() async {
-    return _wals.where((w) => w.status == WalStatus.miss).toList();
+    return _wals.where((w) => _isPendingUploadStatus(w.status)).toList();
   }
 
   /// Returns unsynced WALs whose timerStart falls within [sessionStartSeconds, now].
@@ -326,10 +338,9 @@ class LocalWalSyncImpl implements LocalWalSync {
     return _wals
         .where(
           (w) =>
-              w.status == WalStatus.miss &&
+              _isPendingUploadStatus(w.status) &&
               w.storage == WalStorage.disk &&
-              w.timerStart >= sessionStartSeconds &&
-              w.timerStart <= now,
+              _walOverlapsSession(w, sessionStartSeconds, now),
         )
         .toList();
   }
@@ -350,28 +361,16 @@ class LocalWalSyncImpl implements LocalWalSync {
     final high = _frames.length;
     if (high <= 0) return;
 
-    var lossesThreshold = 10 * _framesPerSecond;
     var timerEnd = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     var chunk = _frames.sublist(0, high).map((f) => f.payload).toList();
     var timerStart = timerEnd - high ~/ _framesPerSecond;
     var chunkFrameCount = high;
 
-    // Same shouldStored check as _chunk(): only store if unlimited storage enabled
-    // or if significant frame loss detected (meaning WebSocket didn't deliver them).
+    // Same shouldStored check as _chunk(): store if unlimited storage is enabled
+    // or any frame has not been durably acknowledged.
     bool shouldStored = SharedPreferencesUtil().unlimitedLocalStorageEnabled;
     if (!shouldStored) {
-      bool synced = true;
-      var losses = 0;
-      for (var i = 0; i < high; i++) {
-        if (!_frameSynced[i]) {
-          losses++;
-          if (losses >= lossesThreshold) {
-            synced = false;
-            break;
-          }
-        }
-      }
-      shouldStored = !synced;
+      shouldStored = _hasUnsyncedFrame(0, high);
     }
 
     if (shouldStored) {
@@ -416,11 +415,12 @@ class LocalWalSyncImpl implements LocalWalSync {
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     int stamped = 0;
     for (final wal in _wals) {
-      if (wal.status == WalStatus.miss &&
-          wal.timerStart >= sessionStartSeconds &&
-          wal.timerStart <= now &&
+      if (_isPendingUploadStatus(wal.status) &&
+          _walOverlapsSession(wal, sessionStartSeconds, now) &&
           wal.conversationId == null) {
         wal.conversationId = conversationId;
+        wal.retryCount = 0;
+        wal.lastRetryAt = 0;
         stamped++;
       }
     }
@@ -433,10 +433,41 @@ class LocalWalSyncImpl implements LocalWalSync {
   /// Returns WALs that have a conversationId but haven't been synced yet.
   /// Used for startup recovery after app kill.
   List<Wal> getOrphanedWals() {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     return _wals
-        .where((w) =>
-            w.status == WalStatus.miss && w.storage == WalStorage.disk && w.conversationId != null && w.retryCount < 3)
+        .where(
+          (w) =>
+              _isPendingUploadStatus(w.status) &&
+              w.storage == WalStorage.disk &&
+              w.conversationId != null &&
+              _canRetryPendingWal(w, now),
+        )
         .toList();
+  }
+
+  /// Returns recent local phone WALs that are retryable but not attached to any conversation.
+  /// Used as a recovery path when the backend processing event was missed or arrived outside
+  /// the original session timestamp window.
+  List<Wal> getUnassignedPendingWals({int maxAgeSeconds = 86400}) {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    return _wals
+        .where(
+          (w) =>
+              _isPendingUploadStatus(w.status) &&
+              w.storage == WalStorage.disk &&
+              w.conversationId == null &&
+              now - w.timerStart <= maxAgeSeconds &&
+              _canRetryPendingWal(w, now),
+        )
+        .toList();
+  }
+
+  Future<void> attachWalToConversationAndPersist(Wal wal, String conversationId) async {
+    wal.conversationId = conversationId;
+    wal.retryCount = 0;
+    wal.lastRetryAt = 0;
+    await _saveWalsToFile();
+    listener.onWalUpdated();
   }
 
   /// Persist retry metadata (retryCount, lastRetryAt) for a WAL after failed sync attempts.
@@ -501,7 +532,7 @@ class LocalWalSyncImpl implements LocalWalSync {
     _isCancelled = false;
     _accumulatedResponse = null;
 
-    var wals = _wals.where((w) => w.status == WalStatus.miss && w.storage == WalStorage.disk).toList();
+    var wals = _wals.where((w) => _isPendingUploadStatus(w.status) && w.storage == WalStorage.disk).toList();
     if (wals.isEmpty) {
       Logger.debug("All synced!");
       DebugLogManager.logInfo('Local upload: no files to sync');
@@ -519,8 +550,8 @@ class LocalWalSyncImpl implements LocalWalSync {
     int filesUploaded = 0;
     final totalFilesToUpload = wals.length;
 
-    var steps = 3;
-    for (var i = wals.length - 1; i >= 0; i -= steps) {
+    const batchSize = 1;
+    for (var i = wals.length - 1; i >= 0; i -= batchSize) {
       if (_isCancelled) {
         Logger.debug("LocalWalSync: Upload cancelled");
         DebugLogManager.logWarning('Local upload cancelled', {
@@ -539,7 +570,7 @@ class LocalWalSyncImpl implements LocalWalSync {
         break;
       }
       var right = i;
-      var left = right - steps;
+      var left = right - batchSize + 1;
       if (left < 0) {
         left = 0;
       }
@@ -591,6 +622,8 @@ class LocalWalSyncImpl implements LocalWalSync {
 
       if (files.isEmpty) {
         Logger.debug("Files are empty");
+        await _saveWalsToFile();
+        listener.onWalUpdated();
         continue;
       }
 
@@ -656,13 +689,13 @@ class LocalWalSyncImpl implements LocalWalSync {
             }
           }
         }
-        // Count actual unique synced WALs (batch ranges overlap, so don't accumulate files.length)
+        // Count actual synced WALs instead of accumulating attempted files.
         filesUploaded = wals.where((w) => w.status == WalStatus.synced).length;
       } catch (e) {
         print('Local WAL sync batch failed: $e, continuing with remaining files');
         batchesFailed++;
         DebugLogManager.logError(e, null, 'Local upload batch failed: ${e.toString()}', {
-          'batchIndex': (wals.length - 1 - i) ~/ steps,
+          'batchIndex': (wals.length - 1 - i) ~/ batchSize,
           'filesInBatch': files.length,
         });
         for (var j = left; j <= right; j++) {

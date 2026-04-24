@@ -2,8 +2,6 @@ import inspect
 from functools import wraps
 from typing import List, Dict, Any, Callable
 
-from google.cloud import firestore
-
 from database import users as users_db, redis_db
 from ._client import db
 import logging

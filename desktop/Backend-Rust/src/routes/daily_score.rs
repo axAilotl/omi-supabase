@@ -7,10 +7,10 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use chrono::{NaiveDate, Utc, Duration};
+use chrono::{Duration, NaiveDate, Utc};
 
 use crate::auth::AuthUser;
-use crate::models::{DailyScore, DailyScoreQuery, ScoreResponse, ScoreData};
+use crate::models::{DailyScore, DailyScoreQuery, ScoreData, ScoreResponse};
 use crate::AppState;
 
 /// GET /v1/daily-score - Calculate daily score from action items due today (legacy endpoint)
@@ -21,13 +21,10 @@ async fn get_daily_score(
 ) -> Result<Json<DailyScore>, StatusCode> {
     // Parse date or use today
     let date = match query.date {
-        Some(date_str) => {
-            NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
-                .map_err(|_| {
-                    tracing::error!("Invalid date format: {}", date_str);
-                    StatusCode::BAD_REQUEST
-                })?
-        }
+        Some(date_str) => NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").map_err(|_| {
+            tracing::error!("Invalid date format: {}", date_str);
+            StatusCode::BAD_REQUEST
+        })?,
         None => Utc::now().date_naive(),
     };
 
@@ -73,13 +70,10 @@ async fn get_scores(
 ) -> Result<Json<ScoreResponse>, StatusCode> {
     // Parse date or use today
     let date = match query.date {
-        Some(date_str) => {
-            NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
-                .map_err(|_| {
-                    tracing::error!("Invalid date format: {}", date_str);
-                    StatusCode::BAD_REQUEST
-                })?
-        }
+        Some(date_str) => NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").map_err(|_| {
+            tracing::error!("Invalid date format: {}", date_str);
+            StatusCode::BAD_REQUEST
+        })?,
         None => Utc::now().date_naive(),
     };
 
@@ -96,9 +90,15 @@ async fn get_scores(
 
     // Get all three scores in parallel
     let (daily_result, weekly_result, overall_result) = tokio::join!(
-        state.firestore.get_action_items_for_daily_score(&user.uid, &today_start, &today_end),
-        state.firestore.get_action_items_for_weekly_score(&user.uid, &week_start, &today_end),
-        state.firestore.get_action_items_for_overall_score(&user.uid)
+        state
+            .firestore
+            .get_action_items_for_daily_score(&user.uid, &today_start, &today_end),
+        state
+            .firestore
+            .get_action_items_for_weekly_score(&user.uid, &week_start, &today_end),
+        state
+            .firestore
+            .get_action_items_for_overall_score(&user.uid)
     );
 
     // Calculate daily score
@@ -109,11 +109,19 @@ async fn get_scores(
             } else {
                 0.0
             };
-            ScoreData { score, completed_tasks: completed, total_tasks: total }
+            ScoreData {
+                score,
+                completed_tasks: completed,
+                total_tasks: total,
+            }
         }
         Err(e) => {
             tracing::error!("Failed to calculate daily score: {}", e);
-            ScoreData { score: 0.0, completed_tasks: 0, total_tasks: 0 }
+            ScoreData {
+                score: 0.0,
+                completed_tasks: 0,
+                total_tasks: 0,
+            }
         }
     };
 
@@ -125,11 +133,19 @@ async fn get_scores(
             } else {
                 0.0
             };
-            ScoreData { score, completed_tasks: completed, total_tasks: total }
+            ScoreData {
+                score,
+                completed_tasks: completed,
+                total_tasks: total,
+            }
         }
         Err(e) => {
             tracing::error!("Failed to calculate weekly score: {}", e);
-            ScoreData { score: 0.0, completed_tasks: 0, total_tasks: 0 }
+            ScoreData {
+                score: 0.0,
+                completed_tasks: 0,
+                total_tasks: 0,
+            }
         }
     };
 
@@ -141,24 +157,34 @@ async fn get_scores(
             } else {
                 0.0
             };
-            ScoreData { score, completed_tasks: completed, total_tasks: total }
+            ScoreData {
+                score,
+                completed_tasks: completed,
+                total_tasks: total,
+            }
         }
         Err(e) => {
             tracing::error!("Failed to calculate overall score: {}", e);
-            ScoreData { score: 0.0, completed_tasks: 0, total_tasks: 0 }
+            ScoreData {
+                score: 0.0,
+                completed_tasks: 0,
+                total_tasks: 0,
+            }
         }
     };
 
     // Determine default tab - show the one with highest score
     // If daily has tasks and highest score, show daily
     // Otherwise prefer weekly over overall if scores are equal
-    let default_tab = if daily.total_tasks > 0 && daily.score >= weekly.score && daily.score >= overall.score {
-        "daily"
-    } else if weekly.score >= overall.score {
-        "weekly"
-    } else {
-        "overall"
-    }.to_string();
+    let default_tab =
+        if daily.total_tasks > 0 && daily.score >= weekly.score && daily.score >= overall.score {
+            "daily"
+        } else if weekly.score >= overall.score {
+            "weekly"
+        } else {
+            "overall"
+        }
+        .to_string();
 
     tracing::info!(
         "Scores for user {}: daily={:.1}% ({}/{}), weekly={:.1}% ({}/{}), overall={:.1}% ({}/{}), default={}",

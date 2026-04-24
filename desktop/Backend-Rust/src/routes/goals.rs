@@ -60,12 +60,12 @@ async fn create_goal(
         request.goal_type
     );
 
-    let target_value = request.target_value.unwrap_or_else(|| {
-        match request.goal_type {
+    let target_value = request
+        .target_value
+        .unwrap_or_else(|| match request.goal_type {
             GoalType::Boolean => 1.0,
             _ => 100.0,
-        }
-    });
+        });
 
     match state
         .firestore
@@ -101,7 +101,9 @@ async fn update_goal(
     tracing::info!("Updating goal {} for user {}", goal_id, user.uid);
 
     let completed_at = request.completed_at.as_ref().and_then(|s| {
-        chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
     });
 
     match state
@@ -196,15 +198,15 @@ async fn delete_goal(
         .update_goal(
             &user.uid,
             &goal_id,
-            None,  // title
-            None,  // description
-            None,  // target_value
-            None,  // current_value
-            None,  // min_value
-            None,  // max_value
-            None,  // unit
-            Some(false),  // is_active = false
-            None,  // completed_at = None (distinguishes abandoned from completed)
+            None,        // title
+            None,        // description
+            None,        // target_value
+            None,        // current_value
+            None,        // min_value
+            None,        // max_value
+            None,        // unit
+            Some(false), // is_active = false
+            None,        // completed_at = None (distinguishes abandoned from completed)
         )
         .await
     {

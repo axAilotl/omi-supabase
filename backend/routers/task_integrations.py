@@ -1023,12 +1023,12 @@ async def handle_oauth_callback(
             except Exception as e:
                 logger.error(f'{app_key}: Error fetching additional data: {e}')
 
-            # Store in Firebase
+            # Store in backend integration state
             try:
                 users_db.set_task_integration(uid, app_key, integration_data)
                 logger.info(f'{app_key}: Successfully stored tokens for user {uid}')
             except Exception as e:
-                logger.error(f'{app_key}: Error storing tokens in Firebase: {e}')
+                logger.error(f'{app_key}: Error storing tokens in backend storage: {e}')
                 deep_link = f'omi://{app_key}/callback?error=storage_failed'
                 return render_oauth_response(request, app_key, success=True, redirect_url=deep_link)
 

@@ -64,6 +64,9 @@ import 'package:omi/backend/schema/message_event.dart'
 class CaptureProvider extends ChangeNotifier
     with MessageNotifierMixin
     implements ITransctiptSegmentSocketServiceListener {
+  static const int _walRetryCooldownSeconds = 300;
+  static const int _unassignedWalAttachGraceSeconds = 600;
+
   ConversationProvider? conversationProvider;
   MessageProvider? messageProvider;
   PeopleProvider? peopleProvider;
@@ -72,6 +75,7 @@ class CaptureProvider extends ChangeNotifier
 
   // Cache refresh for backend-created persons
   Future<void>? _peopleRefreshFuture;
+  final Map<String, Timer> _autoSyncedConversationRefreshTimers = {};
 
   TranscriptSegmentSocketService? _socket;
   Timer? _keepAliveTimer;
@@ -399,9 +403,8 @@ class CaptureProvider extends ChangeNotifier
     Logger.debug('Initiating WebSocket with: codec=$codec, sampleRate=$sampleRate, channels=$channels, isPcm=$isPcm');
 
     // Get language and custom STT config
-    String language = SharedPreferencesUtil().hasSetPrimaryLanguage
-        ? SharedPreferencesUtil().userPrimaryLanguage
-        : "multi";
+    String language =
+        SharedPreferencesUtil().hasSetPrimaryLanguage ? SharedPreferencesUtil().userPrimaryLanguage : "multi";
     final customSttConfig = SharedPreferencesUtil().customSttConfig;
 
     Logger.debug('Custom STT enabled: ${customSttConfig.isEnabled}, provider: ${customSttConfig.provider}');
@@ -415,13 +418,13 @@ class CaptureProvider extends ChangeNotifier
 
     // Connect to the transcript socket
     _socket = await ServiceManager.instance().socket.conversation(
-      codec: codec,
-      sampleRate: sampleRate,
-      language: language,
-      force: force,
-      source: source,
-      customSttConfig: effectiveConfig,
-    );
+          codec: codec,
+          sampleRate: sampleRate,
+          language: language,
+          force: force,
+          source: source,
+          customSttConfig: effectiveConfig,
+        );
     if (_socket == null) {
       _startKeepAliveServices();
       Logger.debug("Can not create new conversation socket");
@@ -514,24 +517,20 @@ class CaptureProvider extends ChangeNotifier
             _isProcessingButtonEvent = true;
             if (_isPaused) {
               MixpanelManager().omiDoubleTap(feature: 'unmute');
-              resumeDeviceRecording()
-                  .then((_) {
-                    _isProcessingButtonEvent = false;
-                  })
-                  .catchError((e) {
-                    Logger.debug("Error resuming device recording: $e");
-                    _isProcessingButtonEvent = false;
-                  });
+              resumeDeviceRecording().then((_) {
+                _isProcessingButtonEvent = false;
+              }).catchError((e) {
+                Logger.debug("Error resuming device recording: $e");
+                _isProcessingButtonEvent = false;
+              });
             } else {
               MixpanelManager().omiDoubleTap(feature: 'mute');
-              pauseDeviceRecording()
-                  .then((_) {
-                    _isProcessingButtonEvent = false;
-                  })
-                  .catchError((e) {
-                    Logger.debug("Error pausing device recording: $e");
-                    _isProcessingButtonEvent = false;
-                  });
+              pauseDeviceRecording().then((_) {
+                _isProcessingButtonEvent = false;
+              }).catchError((e) {
+                Logger.debug("Error pausing device recording: $e");
+                _isProcessingButtonEvent = false;
+              });
             }
           } else if (doubleTapAction == 2) {
             // Star ongoing conversation (doesn't end it)
@@ -621,8 +620,7 @@ class CaptureProvider extends ChangeNotifier
         // Local storage syncs
         var checkWalSupported =
             (_recordingDevice?.type == DeviceType.omi || _recordingDevice?.type == DeviceType.openglass) &&
-            codec.isOpusSupported() &&
-            (_socket?.state != SocketServiceState.connected || SharedPreferencesUtil().unlimitedLocalStorageEnabled);
+                codec.isOpusSupported();
         if (checkWalSupported != _isWalSupported) {
           setIsWalSupported(checkWalSupported);
         }
@@ -643,12 +641,8 @@ class CaptureProvider extends ChangeNotifier
           // Track bytes sent to websocket
           _wsSocketBytesSent += socketPayload.length;
 
-          // Mark frames as synced
-          if (_isWalSupported) {
-            for (final frame in frames) {
-              _wal.getSyncs().phone.markFrameSynced(frame.syncKey);
-            }
-          }
+          // A local socket write is not a server/process ACK. Keep WAL frames retryable
+          // until an explicit durable acknowledgement exists.
         }
       },
     );
@@ -723,9 +717,8 @@ class CaptureProvider extends ChangeNotifier
       return;
     }
     BleAudioCodec codec = await _getAudioCodec(_recordingDevice!.id);
-    var language = SharedPreferencesUtil().hasSetPrimaryLanguage
-        ? SharedPreferencesUtil().userPrimaryLanguage
-        : "multi";
+    var language =
+        SharedPreferencesUtil().hasSetPrimaryLanguage ? SharedPreferencesUtil().userPrimaryLanguage : "multi";
     final customSttConfig = SharedPreferencesUtil().customSttConfig;
     final sttConfigId = customSttConfig.sttConfigId;
 
@@ -898,6 +891,10 @@ class CaptureProvider extends ChangeNotifier
     _connectionStateListener?.cancel();
     _metricsTimer?.cancel();
     _autoSyncFallbackTimer?.cancel();
+    for (final timer in _autoSyncedConversationRefreshTimers.values) {
+      timer.cancel();
+    }
+    _autoSyncedConversationRefreshTimers.clear();
     _peopleRefreshFuture = null; // Clear in-flight tracker
 
     super.dispose();
@@ -965,7 +962,6 @@ class CaptureProvider extends ChangeNotifier
 
           if (_socket?.state == SocketServiceState.connected) {
             _socket?.send(frame.payload);
-            _wal.getSyncs().phone.markFrameSynced(frame.syncKey);
           }
         }
       },
@@ -989,7 +985,6 @@ class CaptureProvider extends ChangeNotifier
         _wal.getSyncs().phone.onFrameCaptured(frame);
         if (_socket?.state == SocketServiceState.connected) {
           _socket?.send(frame.payload);
-          _wal.getSyncs().phone.markFrameSynced(frame.syncKey);
         }
       }
       _phoneMicWalActive = false;
@@ -1334,6 +1329,17 @@ class CaptureProvider extends ChangeNotifier
     // Remaining attempts = maxRetries minus already-persisted retryCount
     const maxRetries = 3;
     const baseDelay = 5;
+    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    if (wal.retryCount >= maxRetries) {
+      if (wal.lastRetryAt > 0 && nowSeconds - wal.lastRetryAt < _walRetryCooldownSeconds) {
+        Logger.debug('Auto-sync WAL ${wal.id}: retry cap reached recently, waiting for cooldown');
+        return;
+      }
+      Logger.debug('Auto-sync WAL ${wal.id}: retry cap expired, resetting retry metadata');
+      wal.retryCount = 0;
+      wal.lastRetryAt = 0;
+      await phoneSync.persistRetryMetadata(wal);
+    }
     final startAttempt = wal.retryCount;
 
     for (int attempt = startAttempt; attempt < maxRetries; attempt++) {
@@ -1347,6 +1353,7 @@ class CaptureProvider extends ChangeNotifier
           throw Exception('Partial sync failure: ${result.failedSegments}/${result.totalSegments} segments failed');
         }
         await phoneSync.markWalSyncedAndPersist(wal);
+        _scheduleAutoSyncedConversationRefresh(conversationId);
         return;
       } on SocketException {
         Logger.debug('Auto-sync WAL ${wal.id}: network error, aborting without incrementing retryCount');
@@ -1366,6 +1373,24 @@ class CaptureProvider extends ChangeNotifier
     }
   }
 
+  void _scheduleAutoSyncedConversationRefresh(String conversationId) {
+    _autoSyncedConversationRefreshTimers[conversationId]?.cancel();
+    _autoSyncedConversationRefreshTimers[conversationId] = Timer(const Duration(seconds: 1), () async {
+      _autoSyncedConversationRefreshTimers.remove(conversationId);
+      try {
+        final conversation = await getConversationById(conversationId);
+        if (conversation == null) {
+          Logger.debug('Auto-sync refresh: conversation $conversationId not found');
+          return;
+        }
+        conversationProvider?.upsertConversation(conversation);
+        Logger.debug('Auto-sync refresh: updated conversation $conversationId after WAL upload');
+      } catch (e) {
+        Logger.debug('Auto-sync refresh failed for conversation $conversationId: $e');
+      }
+    });
+  }
+
   /// Recover orphaned WALs on startup. Called once after providers are initialized.
   /// Finds WALs with conversationId set but status still miss, and syncs them.
   /// Skips recovery if offline — retryCount is not incremented for transient failures.
@@ -1378,12 +1403,16 @@ class CaptureProvider extends ChangeNotifier
     final phoneSync = _wal.getSyncs().phone;
     await phoneSync.walReady; // Wait for WALs to be loaded from disk
     final orphaned = phoneSync.getOrphanedWals();
-    if (orphaned.isEmpty) return;
 
-    Logger.debug('Startup recovery: found ${orphaned.length} orphaned WALs to sync');
-    for (final wal in orphaned) {
-      await _syncSingleWal(wal, wal.conversationId!, phoneSync);
+    if (orphaned.isNotEmpty) {
+      Logger.debug('Startup recovery: found ${orphaned.length} orphaned WALs to sync');
+      for (final wal in orphaned) {
+        await _syncSingleWal(wal, wal.conversationId!, phoneSync);
+      }
     }
+
+    await _recoverUnassignedRecentWals(phoneSync);
+
     // Check if any orphaned WALs remain (e.g., transient SocketException while "online").
     // If so, allow onConnectionStateChanged to re-trigger recovery on next transition.
     final remaining = phoneSync.getOrphanedWals();
@@ -1391,6 +1420,88 @@ class CaptureProvider extends ChangeNotifier
       _orphanRecoveryDone = false;
     }
   }
+
+  Future<void> _recoverUnassignedRecentWals(LocalWalSyncImpl phoneSync) async {
+    final pending = phoneSync.getUnassignedPendingWals();
+    if (pending.isEmpty) return;
+
+    final conversations = await getConversations(limit: 30, includeDiscarded: false);
+    if (conversations.isEmpty) return;
+
+    int attached = 0;
+    for (final wal in pending) {
+      final conversation = _findBestConversationForWal(wal, conversations);
+      if (conversation == null) continue;
+
+      Logger.debug('Recovery: attaching WAL ${wal.id} to conversation ${conversation.id}');
+      await phoneSync.attachWalToConversationAndPersist(wal, conversation.id);
+      attached++;
+      await _syncSingleWal(wal, conversation.id, phoneSync);
+    }
+
+    if (attached > 0) {
+      Logger.debug('Recovery: attached $attached unassigned WALs by timestamp overlap');
+    }
+  }
+
+  ServerConversation? _findBestConversationForWal(Wal wal, List<ServerConversation> conversations) {
+    ServerConversation? bestConversation;
+    int? bestDistance;
+
+    for (final conversation in conversations) {
+      if (conversation.deleted || conversation.discarded || conversation.status == ConversationStatus.failed) {
+        continue;
+      }
+
+      final distance = _conversationWalDistanceSeconds(wal, conversation);
+      if (distance > _unassignedWalAttachGraceSeconds) continue;
+
+      if (bestDistance == null || distance < bestDistance) {
+        bestDistance = distance;
+        bestConversation = conversation;
+      }
+    }
+
+    return bestConversation;
+  }
+
+  int _conversationWalDistanceSeconds(Wal wal, ServerConversation conversation) {
+    final walStart = wal.timerStart;
+    final walEnd = wal.timerStart + (wal.seconds > 0 ? wal.seconds : 1);
+    final window = _conversationWindowSeconds(conversation);
+    final conversationStart = window[0];
+    final conversationEnd = window[1];
+
+    if (walEnd >= conversationStart && walStart <= conversationEnd) {
+      return 0;
+    }
+    if (walEnd < conversationStart) {
+      return conversationStart - walEnd;
+    }
+    return walStart - conversationEnd;
+  }
+
+  List<int> _conversationWindowSeconds(ServerConversation conversation) {
+    int? start = _epochSeconds(conversation.startedAt);
+    int? end = _epochSeconds(conversation.finishedAt);
+
+    for (final audioFile in conversation.audioFiles) {
+      final audioStart = _epochSeconds(audioFile.startedAt);
+      if (audioStart == null) continue;
+      final audioEnd = audioStart + audioFile.duration.round();
+      start = start == null || audioStart < start ? audioStart : start;
+      end = end == null || audioEnd > end ? audioEnd : end;
+    }
+
+    final createdAt = conversation.createdAt.millisecondsSinceEpoch ~/ 1000;
+    final duration = conversation.getDurationInSeconds();
+    final resolvedStart = start ?? (duration > 0 ? createdAt - duration : createdAt - _unassignedWalAttachGraceSeconds);
+    final resolvedEnd = end ?? (duration > 0 ? resolvedStart + duration : createdAt + _unassignedWalAttachGraceSeconds);
+
+    return [resolvedStart, resolvedEnd];
+  }
+
+  int? _epochSeconds(DateTime? value) => value == null ? null : value.millisecondsSinceEpoch ~/ 1000;
 
   Future<void> _processConversationCreated(ServerConversation? conversation, List<ServerMessage> messages) async {
     if (conversation == null) return;

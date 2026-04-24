@@ -25,23 +25,15 @@ async fn get_knowledge_graph(
 ) -> Result<Json<KnowledgeGraphResponse>, StatusCode> {
     tracing::info!("Getting knowledge graph for user {}", user.uid);
 
-    let nodes = state
-        .firestore
-        .get_kg_nodes(&user.uid)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to get KG nodes: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let nodes = state.firestore.get_kg_nodes(&user.uid).await.map_err(|e| {
+        tracing::error!("Failed to get KG nodes: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
-    let edges = state
-        .firestore
-        .get_kg_edges(&user.uid)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to get KG edges: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let edges = state.firestore.get_kg_edges(&user.uid).await.map_err(|e| {
+        tracing::error!("Failed to get KG edges: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok(Json(KnowledgeGraphResponse { nodes, edges }))
 }
@@ -94,8 +86,7 @@ async fn rebuild_knowledge_graph(
     tracing::info!("Processing {} memories for knowledge graph", memories.len());
 
     // Create LLM client
-    let llm = LlmClient::new(api_key)
-        .with_model(crate::llm::model_qos::gemini_extraction());
+    let llm = LlmClient::new(api_key).with_model(crate::llm::model_qos::gemini_extraction());
 
     // Track nodes by lowercase label for deduplication
     let mut node_map: HashMap<String, KnowledgeGraphNode> = HashMap::new();
@@ -113,7 +104,11 @@ async fn rebuild_knowledge_graph(
         {
             Ok(e) => e,
             Err(e) => {
-                tracing::warn!("Failed to extract entities from memory {}: {}", memory.id, e);
+                tracing::warn!(
+                    "Failed to extract entities from memory {}: {}",
+                    memory.id,
+                    e
+                );
                 continue;
             }
         };
@@ -166,12 +161,16 @@ async fn rebuild_knowledge_graph(
             // Find source and target nodes
             let source_id = node_map
                 .iter()
-                .find(|(_, n)| n.label_lower == source_lower || n.aliases_lower.contains(&source_lower))
+                .find(|(_, n)| {
+                    n.label_lower == source_lower || n.aliases_lower.contains(&source_lower)
+                })
                 .map(|(_, n)| n.id.clone());
 
             let target_id = node_map
                 .iter()
-                .find(|(_, n)| n.label_lower == target_lower || n.aliases_lower.contains(&target_lower))
+                .find(|(_, n)| {
+                    n.label_lower == target_lower || n.aliases_lower.contains(&target_lower)
+                })
                 .map(|(_, n)| n.id.clone());
 
             if let (Some(src), Some(tgt)) = (source_id, target_id) {

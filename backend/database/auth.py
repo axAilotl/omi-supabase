@@ -1,7 +1,6 @@
-from firebase_admin import auth
-
 from database._client import db
 from database.redis_db import cache_user_name
+from providers.auth import AuthProviderError, get_auth_provider
 import logging
 
 logger = logging.getLogger(__name__)
@@ -9,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 def get_user_from_uid(uid: str):
     try:
-        user = auth.get_user(uid) if uid else None
-    except Exception as e:
+        user = get_auth_provider().get_user(uid) if uid else None
+    except AuthProviderError as e:
         logger.error(e)
         user = None
     if not user:
@@ -29,6 +28,8 @@ def get_user_from_uid(uid: str):
 
 def _get_firestore_user_name(uid: str):
     """Fallback: get user name from Firestore user profile."""
+    if db is None:
+        return None
     try:
         user_doc = db.collection('users').document(uid).get()
         if user_doc.exists:

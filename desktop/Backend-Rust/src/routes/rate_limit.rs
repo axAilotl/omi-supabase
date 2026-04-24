@@ -117,7 +117,11 @@ impl GeminiRateLimiter {
             let mut cache = self.cache.lock().await;
             if let Some(entry) = cache.get_mut(uid) {
                 // Prune stale burst entries
-                while entry.local_burst.front().map_or(false, |&t| t < burst_cutoff) {
+                while entry
+                    .local_burst
+                    .front()
+                    .map_or(false, |&t| t < burst_cutoff)
+                {
                     entry.local_burst.pop_front();
                 }
 
@@ -135,7 +139,10 @@ impl GeminiRateLimiter {
         }
 
         // Phase 3: Call Redis (source of truth — records the request)
-        match redis.check_gemini_rate_limit(uid, BURST_PER_MINUTE, BURST_WINDOW_SECS).await {
+        match redis
+            .check_gemini_rate_limit(uid, BURST_PER_MINUTE, BURST_WINDOW_SECS)
+            .await
+        {
             Ok((daily_count, burst_count)) => {
                 let snapshot = RateSnapshot {
                     daily_count: daily_count as u32,
@@ -160,7 +167,11 @@ impl GeminiRateLimiter {
                 }
 
                 // Track burst locally
-                while entry.local_burst.front().map_or(false, |&t| t < burst_cutoff) {
+                while entry
+                    .local_burst
+                    .front()
+                    .map_or(false, |&t| t < burst_cutoff)
+                {
                     entry.local_burst.pop_front();
                 }
                 entry.local_burst.push_back(now);
@@ -194,7 +205,11 @@ pub fn maybe_rewrite_model_path(path: &str, decision: &RateDecision, action: &st
         return path.to_string();
     }
     if let Some(rest) = path.strip_prefix("models/gemini-pro-latest:") {
-        return format!("models/{}:{}", crate::llm::model_qos::gemini_degrade_target(), rest);
+        return format!(
+            "models/{}:{}",
+            crate::llm::model_qos::gemini_degrade_target(),
+            rest
+        );
     }
     path.to_string()
 }
@@ -219,34 +234,49 @@ mod tests {
 
     #[test]
     fn snapshot_allow() {
-        let s = RateSnapshot { daily_count: 10, burst_count: 5 };
+        let s = RateSnapshot {
+            daily_count: 10,
+            burst_count: 5,
+        };
         assert_eq!(s.to_decision(), RateDecision::Allow);
     }
 
     #[test]
     fn snapshot_degrade_at_soft_limit() {
         let soft = model_qos::daily_soft_limit();
-        let s = RateSnapshot { daily_count: soft, burst_count: 5 };
+        let s = RateSnapshot {
+            daily_count: soft,
+            burst_count: 5,
+        };
         assert_eq!(s.to_decision(), RateDecision::DegradeToFlash);
     }
 
     #[test]
     fn snapshot_reject_at_hard_limit() {
         let hard = model_qos::daily_hard_limit();
-        let s = RateSnapshot { daily_count: hard, burst_count: 5 };
+        let s = RateSnapshot {
+            daily_count: hard,
+            burst_count: 5,
+        };
         assert_eq!(s.to_decision(), RateDecision::Reject);
     }
 
     #[test]
     fn snapshot_reject_burst() {
-        let s = RateSnapshot { daily_count: 10, burst_count: 31 };
+        let s = RateSnapshot {
+            daily_count: 10,
+            burst_count: 31,
+        };
         assert_eq!(s.to_decision(), RateDecision::Reject);
     }
 
     #[test]
     fn snapshot_burst_at_exact_limit() {
         // burst_count == BURST_PER_MINUTE is not over (it's the count AFTER add)
-        let s = RateSnapshot { daily_count: 10, burst_count: 30 };
+        let s = RateSnapshot {
+            daily_count: 10,
+            burst_count: 30,
+        };
         assert_eq!(s.to_decision(), RateDecision::Allow);
     }
 
@@ -255,14 +285,20 @@ mod tests {
     #[test]
     fn snapshot_allow_just_below_soft_limit() {
         let soft = model_qos::daily_soft_limit();
-        let s = RateSnapshot { daily_count: soft - 1, burst_count: 5 };
+        let s = RateSnapshot {
+            daily_count: soft - 1,
+            burst_count: 5,
+        };
         assert_eq!(s.to_decision(), RateDecision::Allow);
     }
 
     #[test]
     fn snapshot_degrade_just_below_hard_limit() {
         let hard = model_qos::daily_hard_limit();
-        let s = RateSnapshot { daily_count: hard - 1, burst_count: 5 };
+        let s = RateSnapshot {
+            daily_count: hard - 1,
+            burst_count: 5,
+        };
         assert_eq!(s.to_decision(), RateDecision::DegradeToFlash);
     }
 
@@ -281,11 +317,14 @@ mod tests {
         let limiter = GeminiRateLimiter::new();
         {
             let mut cache = limiter.cache.lock().await;
-            cache.insert("u2".to_string(), CachedEntry {
-                decision: RateDecision::Reject,
-                expires_at: Instant::now() + Duration::from_secs(60),
-                local_burst: VecDeque::new(),
-            });
+            cache.insert(
+                "u2".to_string(),
+                CachedEntry {
+                    decision: RateDecision::Reject,
+                    expires_at: Instant::now() + Duration::from_secs(60),
+                    local_burst: VecDeque::new(),
+                },
+            );
         }
         let decision = limiter.check_and_record("u2", None).await;
         assert_eq!(decision, RateDecision::Allow);
@@ -297,11 +336,14 @@ mod tests {
         let limiter = GeminiRateLimiter::new();
         {
             let mut cache = limiter.cache.lock().await;
-            cache.insert("u3".to_string(), CachedEntry {
-                decision: RateDecision::DegradeToFlash,
-                expires_at: Instant::now() + Duration::from_secs(60),
-                local_burst: VecDeque::new(),
-            });
+            cache.insert(
+                "u3".to_string(),
+                CachedEntry {
+                    decision: RateDecision::DegradeToFlash,
+                    expires_at: Instant::now() + Duration::from_secs(60),
+                    local_burst: VecDeque::new(),
+                },
+            );
         }
         let decision = limiter.check_and_record("u3", None).await;
         assert_eq!(decision, RateDecision::Allow);
@@ -318,11 +360,14 @@ mod tests {
             for i in 0..30 {
                 burst.push_back(now - Duration::from_millis(i * 100));
             }
-            cache.insert("u4".to_string(), CachedEntry {
-                decision: RateDecision::Allow,
-                expires_at: now,
-                local_burst: burst,
-            });
+            cache.insert(
+                "u4".to_string(),
+                CachedEntry {
+                    decision: RateDecision::Allow,
+                    expires_at: now,
+                    local_burst: burst,
+                },
+            );
         }
         let decision = limiter.check_and_record("u4", None).await;
         assert_eq!(decision, RateDecision::Allow);
@@ -335,11 +380,14 @@ mod tests {
         let limiter = GeminiRateLimiter::new();
         {
             let mut cache = limiter.cache.lock().await;
-            cache.insert("u5".to_string(), CachedEntry {
-                decision: RateDecision::Reject,
-                expires_at: Instant::now() - Duration::from_secs(1),
-                local_burst: VecDeque::new(),
-            });
+            cache.insert(
+                "u5".to_string(),
+                CachedEntry {
+                    decision: RateDecision::Reject,
+                    expires_at: Instant::now() - Duration::from_secs(1),
+                    local_burst: VecDeque::new(),
+                },
+            );
         }
         // No Redis → falls through to unmetered Allow
         let decision = limiter.check_and_record("u5", None).await;
@@ -353,11 +401,14 @@ mod tests {
         let limiter = GeminiRateLimiter::new();
         {
             let mut cache = limiter.cache.lock().await;
-            cache.insert("uA".to_string(), CachedEntry {
-                decision: RateDecision::Reject,
-                expires_at: Instant::now() + Duration::from_secs(60),
-                local_burst: VecDeque::new(),
-            });
+            cache.insert(
+                "uA".to_string(),
+                CachedEntry {
+                    decision: RateDecision::Reject,
+                    expires_at: Instant::now() + Duration::from_secs(60),
+                    local_burst: VecDeque::new(),
+                },
+            );
         }
         // uB has no Redis → unmetered Allow
         let decision = limiter.check_and_record("uB", None).await;
@@ -371,17 +422,23 @@ mod tests {
         let limiter = GeminiRateLimiter::new();
         {
             let mut cache = limiter.cache.lock().await;
-            cache.insert("old".to_string(), CachedEntry {
-                decision: RateDecision::Allow,
-                // Expired 10 minutes ago (> 5 min stale cutoff)
-                expires_at: Instant::now() - Duration::from_secs(600),
-                local_burst: VecDeque::new(),
-            });
-            cache.insert("recent".to_string(), CachedEntry {
-                decision: RateDecision::Allow,
-                expires_at: Instant::now() + Duration::from_secs(60),
-                local_burst: VecDeque::new(),
-            });
+            cache.insert(
+                "old".to_string(),
+                CachedEntry {
+                    decision: RateDecision::Allow,
+                    // Expired 10 minutes ago (> 5 min stale cutoff)
+                    expires_at: Instant::now() - Duration::from_secs(600),
+                    local_burst: VecDeque::new(),
+                },
+            );
+            cache.insert(
+                "recent".to_string(),
+                CachedEntry {
+                    decision: RateDecision::Allow,
+                    expires_at: Instant::now() + Duration::from_secs(60),
+                    local_burst: VecDeque::new(),
+                },
+            );
         }
         limiter.evict_stale().await;
         let cache = limiter.cache.lock().await;

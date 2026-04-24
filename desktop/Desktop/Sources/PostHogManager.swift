@@ -1,6 +1,5 @@
 import Foundation
 import PostHog
-import FirebaseAuth
 
 /// Singleton manager for PostHog analytics with Session Replay
 /// Complements MixpanelManager - both track the same events
@@ -44,22 +43,9 @@ class PostHogManager {
     func identify() {
         guard isInitialized else { return }
 
-        var userId: String?
-        var email: String?
-        var name: String?
-
-        // Try Firebase Auth first
-        if let user = Auth.auth().currentUser {
-            userId = user.uid
-            email = user.email
-            name = user.displayName
-        } else if AuthState.shared.isSignedIn, let storedUserId = AuthState.shared.userId {
-            // Fall back to stored auth state (when Firebase SDK auth failed but REST API auth succeeded)
-            userId = storedUserId
-            email = AuthState.shared.userEmail
-            name = AuthService.shared.displayName.isEmpty ? nil : AuthService.shared.displayName
-            log("PostHog: Using stored auth state (Firebase SDK auth not available)")
-        }
+        let userId = AuthState.shared.isSignedIn ? AuthState.shared.userId : nil
+        let email = AuthState.shared.userEmail
+        let name = AuthService.shared.displayName.isEmpty ? nil : AuthService.shared.displayName
 
         guard let uid = userId else {
             log("PostHog: Cannot identify - no user signed in")

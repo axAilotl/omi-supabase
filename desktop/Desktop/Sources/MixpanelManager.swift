@@ -1,6 +1,5 @@
 import Foundation
 import Mixpanel
-import FirebaseAuth
 
 /// Singleton manager for MixPanel analytics
 /// Mirrors the functionality from the Flutter app's MixpanelManager
@@ -75,22 +74,9 @@ class MixpanelManager {
     func identify() {
         guard isInitialized else { return }
 
-        var userId: String?
-        var email: String?
-        var name: String?
-
-        // Try Firebase Auth first
-        if let user = Auth.auth().currentUser {
-            userId = user.uid
-            email = user.email
-            name = user.displayName
-        } else if AuthState.shared.isSignedIn, let storedUserId = AuthState.shared.userId {
-            // Fall back to stored auth state (when Firebase SDK auth failed but REST API auth succeeded)
-            userId = storedUserId
-            email = AuthState.shared.userEmail
-            name = AuthService.shared.displayName.isEmpty ? nil : AuthService.shared.displayName
-            log("MixPanel: Using stored auth state (Firebase SDK auth not available)")
-        }
+        let userId = AuthState.shared.isSignedIn ? AuthState.shared.userId : nil
+        let email = AuthState.shared.userEmail
+        let name = AuthService.shared.displayName.isEmpty ? nil : AuthService.shared.displayName
 
         guard let uid = userId else {
             log("MixPanel: Cannot identify - no user signed in")

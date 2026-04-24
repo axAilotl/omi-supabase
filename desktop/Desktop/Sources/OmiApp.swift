@@ -1,5 +1,3 @@
-import FirebaseAuth
-import FirebaseCore
 import Mixpanel
 import Sentry
 import Sparkle
@@ -64,7 +62,7 @@ class AuthState: ObservableObject {
     self.userEmail = userEmail
   }
 
-  /// Get the user's Firebase UID from UserDefaults (fallback when Firebase SDK auth fails)
+  /// Get the signed-in user ID from UserDefaults.
   var userId: String? {
     UserDefaults.standard.string(forKey: Self.kAuthUserId)
   }
@@ -339,15 +337,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     log("Sentry initialized (environment: \(isDev ? "development" : "production"))")
 
-    // Initialize Firebase
-    let plistPath = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist")
-
-    if let path = plistPath,
-      let options = FirebaseOptions(contentsOfFile: path)
-    {
-      FirebaseApp.configure(options: options)
-      AuthService.shared.configure()
-    }
+    AuthService.shared.configure()
 
     // Initialize analytics (MixPanel + PostHog)
     AnalyticsManager.shared.initialize()

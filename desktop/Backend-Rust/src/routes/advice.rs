@@ -9,7 +9,9 @@ use axum::{
 };
 
 use crate::auth::AuthUser;
-use crate::models::{AdviceDB, AdviceStatusResponse, CreateAdviceRequest, GetAdviceQuery, UpdateAdviceRequest};
+use crate::models::{
+    AdviceDB, AdviceStatusResponse, CreateAdviceRequest, GetAdviceQuery, UpdateAdviceRequest,
+};
 use crate::AppState;
 
 /// POST /v1/advice - Create new advice
@@ -76,7 +78,10 @@ async fn get_advice(
         Ok(advice) => Ok(Json(advice)),
         Err(e) => {
             tracing::error!("Failed to get advice: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get advice: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get advice: {}", e),
+            ))
         }
     }
 }
@@ -146,9 +151,9 @@ async fn mark_all_read(
 pub fn advice_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/advice", get(get_advice).post(create_advice))
-        .route("/v1/advice/mark-all-read", axum::routing::post(mark_all_read))
         .route(
-            "/v1/advice/:id",
-            patch(update_advice).delete(delete_advice),
+            "/v1/advice/mark-all-read",
+            axum::routing::post(mark_all_read),
         )
+        .route("/v1/advice/:id", patch(update_advice).delete(delete_advice))
 }

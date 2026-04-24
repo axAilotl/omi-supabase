@@ -26,7 +26,7 @@ from fastapi.websockets import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 from websockets.exceptions import ConnectionClosed
 
-from firebase_admin.auth import InvalidIdTokenError
+from providers.auth import AuthProviderError as InvalidIdTokenError
 
 from utils.speaker_assignment import (
     process_speaker_assigned_segments,
@@ -2879,7 +2879,7 @@ async def web_listen_handler(
     """
     WebSocket endpoint for web browser clients using first-message authentication.
 
-    First message must be: {"type": "auth", "token": "<firebase_token>"}
+    First message must be: {"type": "auth", "token": "<access_token>"}
     Response: {"type": "auth_response", "success": true/false}
     """
     logger.info("web_listen_handler")

@@ -7,7 +7,6 @@ let package = Package(
     .macOS("14.0")
   ],
   dependencies: [
-    .package(url: "https://github.com/firebase/firebase-ios-sdk.git", from: "11.0.0"),
     .package(url: "https://github.com/mixpanel/mixpanel-swift.git", from: "4.0.0"),
     .package(url: "https://github.com/PostHog/posthog-ios.git", from: "3.0.0"),
     .package(url: "https://github.com/getsentry/sentry-cocoa.git", exact: "8.58.0"),
@@ -37,8 +36,6 @@ let package = Package(
       dependencies: [
         "ObjCExceptionCatcher",
         "CWebP",
-        .product(name: "FirebaseCore", package: "firebase-ios-sdk"),
-        .product(name: "FirebaseAuth", package: "firebase-ios-sdk"),
         .product(name: "Mixpanel", package: "mixpanel-swift"),
         .product(name: "PostHog", package: "posthog-ios"),
         .product(name: "Sentry", package: "sentry-cocoa"),

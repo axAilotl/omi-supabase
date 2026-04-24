@@ -9,7 +9,7 @@ import 'package:omi/backend/preferences.dart';
 import 'package:omi/utils/analytics/intercom.dart';
 import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/debugging/crash_reporter.dart';
-import 'package:omi/utils/debugging/crashlytics_manager.dart';
+import 'package:omi/utils/debugging/crash_reporter_manager.dart';
 import 'package:omi/utils/platform/platform_service.dart';
 
 /// Centralized platform manager for all platform-specific services
@@ -27,7 +27,7 @@ class PlatformManager {
   // Service instances
   MixpanelManager get mixpanel => MixpanelManager();
   IntercomManager get intercom => IntercomManager.instance;
-  CrashReporter get crashReporter => CrashlyticsManager.instance;
+  CrashReporter get crashReporter => CrashReporterManager.instance;
 
   static Future<void> initializeServices() async {
     _instance._packageInfo = await PackageInfo.fromPlatform();
@@ -71,6 +71,6 @@ class PlatformManager {
   String get deviceIdHash => _deviceIdHash;
 
   bool get isAnalyticsSupported => PlatformService.isAnalyticsSupported;
-  bool get isDebuggingSupported => PlatformService.isCrashlyticsSupported;
-  bool get isFCMSupported => Platform.isAndroid || Platform.isIOS;
+  bool get isDebuggingSupported => PlatformService.isCrashReportingSupported;
+  bool get isFCMSupported => false;
 }

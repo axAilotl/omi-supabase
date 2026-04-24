@@ -13,7 +13,7 @@ class AsanaService {
   bool _isAuthenticated = false;
   String? _userGid;
 
-  /// Check if user is authenticated (updated by provider from Firebase)
+  /// Check if user is authenticated (updated by provider from backend data)
   bool get isAuthenticated => _isAuthenticated;
 
   String? get currentUserGid => _userGid;

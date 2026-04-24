@@ -1,42 +1,29 @@
 """
 agent-proxy — WebSocket proxy that bridges the mobile app to a user's agent VM.
 
-Auth: Firebase ID token in Authorization header (Bearer <token>) during WS upgrade.
-Flow: validate token → fetch VM from Firestore → if stopped, restart → connect to VM WS → bidirectional pump.
-History: fetches last 10 agent messages from Firestore and prepends to prompt.
+Auth: backend access token in Authorization header (Bearer <token>) during WS upgrade.
+Flow: validate token → fetch VM from the active user store → if stopped, restart → connect to VM WS → bidirectional pump.
+History: fetches last 10 agent messages from the active backend store and prepends to prompt.
 """
 
 import asyncio
-import base64
 import json
 import logging
-import os
 import uuid
 from datetime import datetime, timezone
 
-import firebase_admin
 import google.auth
 import google.auth.transport.requests
 import httpx
 import websockets
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from firebase_admin import auth, credentials, firestore
-from google.cloud.firestore_v1 import Query
+
+import database.chat as chat_db
+import database.users as users_db
+from providers.auth import AuthProviderError, get_auth_provider
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Firebase init — uses GOOGLE_APPLICATION_CREDENTIALS or ADC
-cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-if cred_path:
-    firebase_admin.initialize_app(credentials.Certificate(cred_path))
-else:
-    firebase_admin.initialize_app()
-
-db = firestore.client()
 
 app = FastAPI()
 logger.info("[agent-proxy] starting up")
@@ -45,10 +32,6 @@ HISTORY_LIMIT = 10
 GCE_PROJECT = "based-hardware"
 VM_KEEPALIVE_INTERVAL = 120  # seconds — ping VM every 2 min during active WS
 
-# Encryption — optional; required for users with enhanced data protection.
-ENCRYPTION_SECRET = os.getenv('ENCRYPTION_SECRET', '').encode('utf-8')
-_encryption_ok = len(ENCRYPTION_SECRET) >= 32
-
 
 @app.get("/health")
 def health():
@@ -56,20 +39,13 @@ def health():
 
 
 def _get_user_context(uid: str) -> tuple:
-    """Get agent VM info and data protection level from the user document."""
-    doc = db.collection('users').document(uid).get()
-    if doc.exists:
-        data = doc.to_dict()
-        return data.get('agentVm'), data.get('data_protection_level', 'enhanced')
-    return None, 'enhanced'
+    """Get agent VM info and data protection level from the active backend store."""
+    return users_db.get_agent_vm(uid), users_db.get_data_protection_level(uid)
 
 
 def _refresh_vm(uid: str) -> dict | None:
-    """Re-read the VM info from Firestore (called after restart to get new IP)."""
-    doc = db.collection('users').document(uid).get()
-    if doc.exists:
-        return doc.to_dict().get('agentVm')
-    return None
+    """Re-read the VM info after a restart to get the latest IP/status."""
+    return users_db.get_agent_vm(uid)
 
 
 # --------------- GCE helpers ---------------
@@ -157,12 +133,9 @@ async def _start_vm_and_wait(vm_name: str, zone: str) -> str:
         return ip
 
 
-def _update_firestore_vm(uid: str, ip: str | None, status: str):
-    """Update the user's agentVm fields in Firestore."""
-    update = {"agentVm.status": status}
-    if ip:
-        update["agentVm.ip"] = ip
-    db.collection('users').document(uid).update(update)
+def _update_agent_vm(uid: str, ip: str | None, status: str):
+    """Update the user's agent VM metadata in the active backend store."""
+    users_db.update_agent_vm(uid, ip, status)
 
 
 async def _reset_vm(vm_name: str, zone: str):
@@ -207,14 +180,14 @@ async def _ensure_vm_running(uid: str, vm: dict, health_failed: bool = False) ->
             if health_failed:
                 # VM is RUNNING but agent process is dead — hard reset
                 logger.info(f"[agent-proxy] VM {vm_name} is RUNNING but unhealthy, resetting...")
-                _update_firestore_vm(uid, None, "provisioning")
+                _update_agent_vm(uid, None, "provisioning")
                 try:
                     await _reset_vm(vm_name, zone)
-                    _update_firestore_vm(uid, vm.get("ip"), "ready")
+                    _update_agent_vm(uid, vm.get("ip"), "ready")
                     return _refresh_vm(uid)
                 except Exception as e:
                     logger.error(f"[agent-proxy] Failed to reset VM {vm_name}: {e}")
-                    _update_firestore_vm(uid, None, "error")
+                    _update_agent_vm(uid, None, "error")
                     return None
             return vm
         if gce_status not in ("TERMINATED", "STOPPED"):
@@ -222,16 +195,16 @@ async def _ensure_vm_running(uid: str, vm: dict, health_failed: bool = False) ->
 
     # VM needs restart
     logger.info(f"[agent-proxy] VM {vm_name} needs restart, starting...")
-    _update_firestore_vm(uid, None, "provisioning")
+    _update_agent_vm(uid, None, "provisioning")
 
     try:
         ip = await _start_vm_and_wait(vm_name, zone)
-        _update_firestore_vm(uid, ip, "ready")
+        _update_agent_vm(uid, ip, "ready")
         logger.info(f"[agent-proxy] VM {vm_name} restarted, ip={ip}")
         return _refresh_vm(uid)
     except Exception as e:
         logger.error(f"[agent-proxy] Failed to restart VM {vm_name}: {e}")
-        _update_firestore_vm(uid, None, "error")
+        _update_agent_vm(uid, None, "error")
         return None
 
 
@@ -250,61 +223,29 @@ async def _wait_for_vm_healthy(vm_ip: str, auth_token: str, timeout: float = 120
     return False
 
 
-# --------------- encryption helpers ---------------
-
-
-def _derive_key(uid: str) -> bytes:
-    hkdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=uid.encode('utf-8'),
-        info=b'user-data-encryption',
-    )
-    return hkdf.derive(ENCRYPTION_SECRET)
-
-
-def _encrypt_text(text: str, uid: str) -> str:
-    if not text or not _encryption_ok:
-        return text
-    key = _derive_key(uid)
-    aesgcm = AESGCM(key)
-    nonce = os.urandom(12)
-    ciphertext = aesgcm.encrypt(nonce, text.encode('utf-8'), None)
-    return base64.b64encode(nonce + ciphertext).decode('utf-8')
-
-
-def _decrypt_text(text: str, uid: str) -> str:
-    if not text or not _encryption_ok:
-        return text
-    try:
-        key = _derive_key(uid)
-        aesgcm = AESGCM(key)
-        payload = base64.b64decode(text.encode('utf-8'))
-        return aesgcm.decrypt(payload[:12], payload[12:], None).decode('utf-8')
-    except Exception:
-        return text
-
-
 # --------------- chat session helpers ---------------
 
 
 def _get_or_create_chat_session(uid: str) -> dict:
     """Get or create the default (plugin_id=None) chat session."""
-    session_ref = (
-        db.collection('users').document(uid).collection('chat_sessions').where('plugin_id', '==', None).limit(1)
-    )
-    for session in session_ref.stream():
-        return session.to_dict()
+    session = chat_db.get_chat_session(uid, app_id=None)
+    if session:
+        return session
 
     session_data = {
         'id': str(uuid.uuid4()),
         'created_at': datetime.now(timezone.utc),
+        'updated_at': datetime.now(timezone.utc),
         'plugin_id': None,
+        'app_id': None,
         'message_ids': [],
         'file_ids': [],
+        'message_count': 0,
+        'starred': False,
+        'preview': None,
+        'title': 'Agent Chat',
     }
-    db.collection('users').document(uid).collection('chat_sessions').document(session_data['id']).set(session_data)
-    return session_data
+    return chat_db.add_chat_session(uid, session_data)
 
 
 # --------------- message persistence ---------------
@@ -312,54 +253,35 @@ def _get_or_create_chat_session(uid: str) -> dict:
 
 def _fetch_chat_history(uid: str, chat_session_id: str) -> list:
     """Fetch last N messages from the chat session, returned oldest-first."""
-    messages_ref = (
-        db.collection('users')
-        .document(uid)
-        .collection('messages')
-        .where('plugin_id', '==', None)
-        .where('chat_session_id', '==', chat_session_id)
-        .order_by('created_at', direction=Query.DESCENDING)
-        .limit(HISTORY_LIMIT)
+    messages = chat_db.get_messages(
+        uid,
+        limit=HISTORY_LIMIT,
+        chat_session_id=chat_session_id,
+        app_id=None,
     )
-    messages = []
-    for doc in messages_ref.stream():
-        data = doc.to_dict()
-        text = data.get('text', '')
-        if data.get('data_protection_level') == 'enhanced':
-            text = _decrypt_text(text, uid)
-        messages.append({'sender': data.get('sender', ''), 'text': text})
-    return list(reversed(messages))
+    history = [{'sender': item.get('sender', ''), 'text': item.get('text', '')} for item in messages]
+    return list(reversed(history))
 
 
 def _save_message(uid: str, text: str, sender: str, chat_session_id: str, data_protection_level: str):
-    """Save a message to Firestore with encryption and chat session linking."""
+    """Save a message with encryption metadata and chat session linking."""
     msg_id = str(uuid.uuid4())
-    store_text = text
-    level = data_protection_level
-    if level == 'enhanced':
-        if _encryption_ok:
-            store_text = _encrypt_text(text, uid)
-        else:
-            level = 'standard'
-
     msg_data = {
         'id': msg_id,
-        'text': store_text,
+        'text': text,
         'created_at': datetime.now(timezone.utc),
         'sender': sender,
         'plugin_id': None,
+        'app_id': None,
         'type': 'text',
         'from_external_integration': False,
         'memories_id': [],
         'files_id': [],
         'chat_session_id': chat_session_id,
-        'data_protection_level': level,
+        'data_protection_level': data_protection_level,
     }
-    user_ref = db.collection('users').document(uid)
-    user_ref.collection('messages').add(msg_data)
-    # Link message to chat session
-    session_ref = user_ref.collection('chat_sessions').document(chat_session_id)
-    session_ref.set({'message_ids': firestore.ArrayUnion([msg_id])}, merge=True)
+    chat_db.add_message(uid, msg_data)
+    chat_db.add_message_to_chat_session(uid, chat_session_id, msg_id)
 
 
 def _build_prompt_with_history(prompt: str, history: list) -> str:
@@ -379,7 +301,7 @@ def _build_prompt_with_history(prompt: str, history: list) -> str:
 
 @app.websocket("/v1/agent/ws")
 async def agent_ws(websocket: WebSocket):
-    # Validate Firebase token from Authorization header
+    # Validate backend access token from Authorization header
     auth_header = websocket.headers.get("authorization", "")
     if not auth_header.startswith("Bearer "):
         logger.warning("[agent-proxy] WS rejected: missing Authorization header")
@@ -388,8 +310,9 @@ async def agent_ws(websocket: WebSocket):
 
     token = auth_header[7:].strip()
     try:
-        uid = auth.verify_id_token(token)["uid"]
-    except Exception as e:
+        claims = get_auth_provider().verify_access_token(token)
+        uid = str(claims.get("uid") or claims["sub"])
+    except (AuthProviderError, KeyError) as e:
         logger.warning(f"[agent-proxy] WS rejected: invalid token: {e}")
         await websocket.close(code=4001, reason="Invalid token")
         return
@@ -407,7 +330,7 @@ async def agent_ws(websocket: WebSocket):
     vm_ip = vm.get("ip")
     vm_token = vm.get("authToken")
 
-    # Fast path: if Firestore says ready with an IP, try connecting directly (skip GCE check).
+    # Fast path: if the active backend says ready with an IP, try connecting directly (skip GCE check).
     # Only fall back to GCE check + restart if the VM isn't reachable.
     if vm.get("status") == "ready" and vm_ip:
         try:
@@ -460,16 +383,13 @@ async def agent_ws(websocket: WebSocket):
         async with websockets.connect(vm_uri, ping_interval=600, ping_timeout=600) as vm_ws:
             logger.info(f"[agent-proxy] uid={uid} connected")
 
-            # Send Firebase token to VM so it can fetch backend tools (calendar, gmail, etc.)
+            # Send the user access token to VM so it can fetch backend tools (calendar, gmail, etc.)
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
-                    await client.post(
-                        f"http://{vm_ip}:8080/auth?token={vm_token}",
-                        json={"firebaseToken": token},
-                    )
-                    logger.info(f"[agent-proxy] uid={uid} sent Firebase token to VM")
+                    await client.post(f"http://{vm_ip}:8080/auth?token={vm_token}", json={"accessToken": token})
+                    logger.info(f"[agent-proxy] uid={uid} sent user token to VM")
             except Exception as e:
-                logger.warning(f"[agent-proxy] uid={uid} failed to send Firebase token: {e}")
+                logger.warning(f"[agent-proxy] uid={uid} failed to send user token: {e}")
 
             first_query_sent = False
 

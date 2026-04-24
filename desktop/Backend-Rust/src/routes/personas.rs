@@ -55,7 +55,11 @@ async fn create_persona(
     user: AuthUser,
     Json(request): Json<CreatePersonaRequest>,
 ) -> Result<Json<PersonaResponse>, (StatusCode, String)> {
-    tracing::info!("Creating persona for user {} with name: {}", user.uid, request.name);
+    tracing::info!(
+        "Creating persona for user {} with name: {}",
+        user.uid,
+        request.name
+    );
 
     // Check if user already has a persona
     if let Ok(Some(_)) = state.firestore.get_user_persona(&user.uid).await {
@@ -70,7 +74,8 @@ async fn create_persona(
         if !is_valid_username(username) {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Invalid username. Use 3-30 lowercase letters, numbers, and underscores.".to_string(),
+                "Invalid username. Use 3-30 lowercase letters, numbers, and underscores."
+                    .to_string(),
             ));
         }
 
@@ -109,7 +114,10 @@ async fn create_persona(
     let (description, persona_prompt) = if !memories.is_empty() {
         if let Some(api_key) = &state.config.gemini_api_key {
             let llm = LlmClient::new(api_key.clone());
-            match llm.generate_persona_from_memories(&request.name, &memories).await {
+            match llm
+                .generate_persona_from_memories(&request.name, &memories)
+                .await
+            {
                 Ok(result) => (result.description, Some(result.persona_prompt)),
                 Err(e) => {
                     tracing::warn!("Failed to generate persona prompt: {}", e);
@@ -121,7 +129,13 @@ async fn create_persona(
             (format!("AI clone of {}", request.name), None)
         }
     } else {
-        (format!("AI clone of {}. Add public memories to enhance the persona.", request.name), None)
+        (
+            format!(
+                "AI clone of {}. Add public memories to enhance the persona.",
+                request.name
+            ),
+            None,
+        )
     };
 
     // Create persona in Firestore
@@ -133,8 +147,8 @@ async fn create_persona(
             request.username.as_deref(),
             &description,
             persona_prompt.as_deref(),
-            &request.name,  // author = name for now
-            None,           // email
+            &request.name, // author = name for now
+            None,          // email
         )
         .await
     {

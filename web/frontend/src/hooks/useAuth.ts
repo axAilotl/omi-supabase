@@ -1,20 +1,19 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { User } from 'firebase/auth';
-import { onAuthStateChange, signInWithGoogle, signOutUser } from '../lib/firebase';
+import { AuthUser, onAuthStateChange, signInWithGoogle, signOutUser } from '../lib/auth';
 
 interface UseAuthReturn {
-  user: User | null;
+  user: AuthUser | null;
   loading: boolean;
-  signIn: () => Promise<User | null>;
+  signIn: () => Promise<AuthUser | null>;
   signOut: () => Promise<void>;
   isAuthenticated: boolean;
   authError: string | null;
 }
 
 export const useAuth = (): UseAuthReturn => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -24,14 +23,14 @@ export const useAuth = (): UseAuthReturn => {
     let unsubscribe: (() => void) | null = null;
 
     try {
-      unsubscribe = onAuthStateChange((user: User | null) => {
-        setUser(user);
+      unsubscribe = onAuthStateChange((nextUser: AuthUser | null) => {
+        setUser(nextUser);
         setLoading(false);
         setAuthError(null); // Clear any previous errors
       });
     } catch (error) {
       const e = error as Error;
-      console.error('❌ Firebase auth initialization failed:', e.message);
+      console.error('❌ Auth initialization failed:', e.message);
       setAuthError(e.message);
       setLoading(false);
       // Don't crash the app - just set user to null and continue
@@ -50,7 +49,7 @@ export const useAuth = (): UseAuthReturn => {
     };
   }, []);
 
-  const signIn = async (): Promise<User | null> => {
+  const signIn = async (): Promise<AuthUser | null> => {
     try {
       setLoading(true);
       setAuthError(null);

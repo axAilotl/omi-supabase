@@ -58,10 +58,7 @@ fn gemini_extraction_for(_tier: ModelTier) -> &'static str {
 /// Allowed models for the Gemini proxy (passthrough from Swift app).
 /// These are the models the desktop app is allowed to request.
 pub fn gemini_proxy_allowed() -> &'static [&'static str] {
-    &[
-        "gemini-3-flash-preview",
-        "gemini-embedding-001",
-    ]
+    &["gemini-3-flash-preview", "gemini-embedding-001"]
 }
 
 /// Model that rate-limited Pro requests degrade to.
@@ -143,7 +140,10 @@ mod tests {
 
     #[test]
     fn gemini_default_premium_is_flash() {
-        assert_eq!(gemini_default_for(ModelTier::Premium), "gemini-3-flash-preview");
+        assert_eq!(
+            gemini_default_for(ModelTier::Premium),
+            "gemini-3-flash-preview"
+        );
     }
 
     #[test]
@@ -156,8 +156,14 @@ mod tests {
 
     #[test]
     fn gemini_extraction_is_flash_for_both_tiers() {
-        assert_eq!(gemini_extraction_for(ModelTier::Premium), "gemini-3-flash-preview");
-        assert_eq!(gemini_extraction_for(ModelTier::Max), "gemini-3-flash-preview");
+        assert_eq!(
+            gemini_extraction_for(ModelTier::Premium),
+            "gemini-3-flash-preview"
+        );
+        assert_eq!(
+            gemini_extraction_for(ModelTier::Max),
+            "gemini-3-flash-preview"
+        );
     }
 
     // --- tier_description_for ---
@@ -179,7 +185,10 @@ mod tests {
         let allowed = gemini_proxy_allowed();
         assert!(allowed.contains(&"gemini-3-flash-preview"));
         assert!(allowed.contains(&"gemini-embedding-001"));
-        assert!(!allowed.contains(&"gemini-pro-latest"), "pro removed from allowlist");
+        assert!(
+            !allowed.contains(&"gemini-pro-latest"),
+            "pro removed from allowlist"
+        );
         assert!(!allowed.contains(&"gemini-ultra"));
     }
 

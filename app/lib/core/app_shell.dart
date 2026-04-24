@@ -109,7 +109,7 @@ class _AppShellState extends State<AppShell> {
 
       final success = uri.queryParameters['success'];
       if (success == 'true') {
-        Logger.debug('Todoist OAuth successful (tokens in Firebase)');
+        Logger.debug('Todoist OAuth successful (tokens stored in backend)');
         _handleTodoistCallback();
       } else {
         Logger.debug('Todoist callback received but no success flag');
@@ -126,7 +126,7 @@ class _AppShellState extends State<AppShell> {
       final success = uri.queryParameters['success'];
       final requiresSetup = uri.queryParameters['requires_setup'];
       if (success == 'true') {
-        Logger.debug('Asana OAuth successful (tokens in Firebase)');
+        Logger.debug('Asana OAuth successful (tokens stored in backend)');
         _handleAsanaCallback(requiresSetup == 'true');
       } else {
         Logger.debug('Asana callback received but no success flag');
@@ -142,7 +142,7 @@ class _AppShellState extends State<AppShell> {
 
       final success = uri.queryParameters['success'];
       if (success == 'true') {
-        Logger.debug('Google Tasks OAuth successful (tokens in Firebase)');
+        Logger.debug('Google Tasks OAuth successful (tokens stored in backend)');
         _handleGoogleTasksCallback();
       } else {
         Logger.debug('Google Tasks callback received but no success flag');
@@ -159,7 +159,7 @@ class _AppShellState extends State<AppShell> {
       final success = uri.queryParameters['success'];
       final requiresSetup = uri.queryParameters['requires_setup'];
       if (success == 'true') {
-        Logger.debug('ClickUp OAuth successful (tokens in Firebase)');
+        Logger.debug('ClickUp OAuth successful (tokens stored in backend)');
         _handleClickUpCallback(requiresSetup == 'true');
       } else {
         Logger.debug('ClickUp callback received but no success flag');
@@ -186,7 +186,7 @@ class _AppShellState extends State<AppShell> {
 
     final success = uri.queryParameters['success'];
     if (success == 'true') {
-      Logger.debug('$oauthLogName OAuth successful (tokens in Firebase)');
+      Logger.debug('$oauthLogName OAuth successful (tokens stored in backend)');
       await onSuccess();
     } else {
       Logger.debug('$oauthLogName callback received but no success flag');
@@ -234,7 +234,7 @@ class _AppShellState extends State<AppShell> {
       Logger.debug('✓ Task integration enabled: Todoist - authentication complete');
       AppSnackbar.showSnackbar(context.l10n.successfullyConnectedTodoist);
 
-      // Notify task integration provider to refresh UI from Firebase
+      // Notify task integration provider to refresh UI from backend data
       context.read<TaskIntegrationProvider>().refresh();
     } else {
       MixpanelManager().taskIntegrationAuthFailed(appName: 'todoist');
@@ -255,7 +255,7 @@ class _AppShellState extends State<AppShell> {
       Logger.debug('✓ Task integration enabled: Asana - authentication complete');
       AppSnackbar.showSnackbar(context.l10n.successfullyConnectedAsana);
 
-      // Notify task integration provider to refresh UI from Firebase
+      // Notify task integration provider to refresh UI from backend data
       context.read<TaskIntegrationProvider>().refresh();
 
       // Auto-open settings page for configuration
@@ -281,7 +281,7 @@ class _AppShellState extends State<AppShell> {
       Logger.debug('✓ Task integration enabled: Google Tasks - authentication complete');
       AppSnackbar.showSnackbar(context.l10n.successfullyConnectedGoogleTasks);
 
-      // Notify task integration provider to refresh UI from Firebase
+      // Notify task integration provider to refresh UI from backend data
       context.read<TaskIntegrationProvider>().refresh();
     } else {
       MixpanelManager().taskIntegrationAuthFailed(appName: 'google_tasks');
@@ -302,7 +302,7 @@ class _AppShellState extends State<AppShell> {
       Logger.debug('✓ Task integration enabled: ClickUp - authentication complete');
       AppSnackbar.showSnackbar(context.l10n.successfullyConnectedClickUp);
 
-      // Notify task integration provider to refresh UI from Firebase
+      // Notify task integration provider to refresh UI from backend data
       context.read<TaskIntegrationProvider>().refresh();
 
       // Auto-open settings page for configuration

@@ -16,8 +16,6 @@ struct ApiKeysResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     anthropic_api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    firebase_api_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     google_calendar_api_key: Option<String>,
 }
 
@@ -27,7 +25,6 @@ struct ApiKeysResponse {
 async fn get_api_keys(State(state): State<AppState>, _user: AuthUser) -> Json<ApiKeysResponse> {
     Json(ApiKeysResponse {
         anthropic_api_key: state.config.anthropic_api_key.clone(),
-        firebase_api_key: state.config.firebase_api_key.clone(),
         google_calendar_api_key: state.config.google_calendar_api_key.clone(),
     })
 }

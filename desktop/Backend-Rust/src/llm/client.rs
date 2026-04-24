@@ -3,11 +3,14 @@
 
 use chrono::{DateTime, Utc};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use super::prompts::*;
-use crate::models::{ActionItem, Category, Event, ExtractedKnowledge, KnowledgeGraphNode, Memory, MemoryCategory, MemoryDB, Structured, TranscriptSegment};
+use crate::models::{
+    ActionItem, Category, Event, ExtractedKnowledge, KnowledgeGraphNode, Memory, MemoryCategory,
+    MemoryDB, Structured, TranscriptSegment,
+};
 
 /// Attempt to repair truncated JSON from Gemini and deserialize it.
 /// Gemini sometimes hits max_output_tokens and returns incomplete JSON.
@@ -51,7 +54,9 @@ fn parse_or_repair_json<T: DeserializeOwned>(response: &str, label: &str) -> Res
             match ch {
                 '{' => stack.push('}'),
                 '[' => stack.push(']'),
-                '}' | ']' => { stack.pop(); }
+                '}' | ']' => {
+                    stack.pop();
+                }
                 _ => {}
             }
         }
@@ -115,19 +120,20 @@ impl CalendarMeetingContext {
             return String::new();
         }
 
-        let participants_str = self.participants.iter()
-            .map(|p| {
-                match (&p.name, &p.email) {
-                    (Some(name), Some(email)) => format!("{} <{}>", name, email),
-                    (Some(name), None) => name.clone(),
-                    (None, Some(email)) => email.clone(),
-                    (None, None) => "Unknown".to_string(),
-                }
+        let participants_str = self
+            .participants
+            .iter()
+            .map(|p| match (&p.name, &p.email) {
+                (Some(name), Some(email)) => format!("{} <{}>", name, email),
+                (Some(name), None) => name.clone(),
+                (None, Some(email)) => email.clone(),
+                (None, None) => "Unknown".to_string(),
             })
             .collect::<Vec<_>>()
             .join(", ");
 
-        let start_time_str = self.start_time
+        let start_time_str = self
+            .start_time
             .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
             .unwrap_or_else(|| "Not specified".to_string());
 
@@ -227,7 +233,13 @@ impl LlmClient {
     }
 
     /// Call the LLM with a specific JSON schema for structured output
-    pub async fn call_with_schema(&self, prompt: &str, temperature: Option<f32>, max_tokens: Option<i32>, schema: Option<serde_json::Value>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn call_with_schema(
+        &self,
+        prompt: &str,
+        temperature: Option<f32>,
+        max_tokens: Option<i32>,
+        schema: Option<serde_json::Value>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let request = GeminiRequest {
             contents: vec![GeminiContent {
                 parts: vec![GeminiPart {
@@ -247,12 +259,7 @@ impl LlmClient {
             self.model, self.api_key
         );
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&request).send().await?;
 
         if !response.status().is_success() {
             let error = response.text().await?;
@@ -260,7 +267,9 @@ impl LlmClient {
         }
 
         let result: GeminiResponse = response.json().await?;
-        Ok(result.candidates.first()
+        Ok(result
+            .candidates
+            .first()
             .and_then(|c| c.content.parts.first())
             .map(|p| p.text.clone())
             .unwrap_or_default())
@@ -295,7 +304,9 @@ impl LlmClient {
             "required": ["title", "overview", "emoji", "category"]
         });
 
-        let response = self.call_with_schema(&prompt, Some(0.5), Some(500), Some(schema)).await?;
+        let response = self
+            .call_with_schema(&prompt, Some(0.5), Some(500), Some(schema))
+            .await?;
 
         #[derive(Deserialize)]
         struct BriefResponse {
@@ -307,8 +318,8 @@ impl LlmClient {
 
         let result: BriefResponse = parse_or_repair_json(&response, "brief structure")?;
 
-        let category = serde_json::from_str(&format!("\"{}\"", result.category))
-            .unwrap_or(Category::Other);
+        let category =
+            serde_json::from_str(&format!("\"{}\"", result.category)).unwrap_or(Category::Other);
 
         Ok(Structured {
             title: result.title,
@@ -332,9 +343,8 @@ impl LlmClient {
     ) -> Result<Structured, Box<dyn std::error::Error + Send + Sync>> {
         // Build calendar context section
         let calendar_prompt_section = match calendar_context {
-            Some(ctx) if !ctx.title.is_empty() => {
-                STRUCTURE_CALENDAR_SECTION.replace("{calendar_context_str}", &ctx.to_context_string())
-            }
+            Some(ctx) if !ctx.title.is_empty() => STRUCTURE_CALENDAR_SECTION
+                .replace("{calendar_context_str}", &ctx.to_context_string()),
             _ => String::new(),
         };
 
@@ -391,32 +401,47 @@ impl LlmClient {
             duration: i32,
         }
 
-        fn default_duration() -> i32 { 30 }
+        fn default_duration() -> i32 {
+            30
+        }
 
-        let response = self.call_with_schema(&prompt, Some(0.7), Some(1500), Some(schema.clone())).await?;
+        let response = self
+            .call_with_schema(&prompt, Some(0.7), Some(1500), Some(schema.clone()))
+            .await?;
 
         // Try parsing, and if it fails (truncated JSON), retry with more tokens
         let result: StructureResponse = match parse_or_repair_json(&response, "structure") {
             Ok(r) => r,
             Err(first_err) => {
-                tracing::warn!("Structure parse failed, retrying with 3000 tokens: {}", first_err);
-                let retry_response = self.call_with_schema(&prompt, Some(0.7), Some(3000), Some(schema)).await?;
+                tracing::warn!(
+                    "Structure parse failed, retrying with 3000 tokens: {}",
+                    first_err
+                );
+                let retry_response = self
+                    .call_with_schema(&prompt, Some(0.7), Some(3000), Some(schema))
+                    .await?;
                 parse_or_repair_json(&retry_response, "structure (retry)")?
             }
         };
 
-        let events: Vec<Event> = result.events.into_iter().filter_map(|e| {
-            chrono::DateTime::parse_from_rfc3339(&e.start).ok().map(|dt| Event {
-                title: e.title,
-                description: e.description,
-                start: dt.with_timezone(&chrono::Utc),
-                // Cap duration at 180 minutes
-                duration: e.duration.min(180),
+        let events: Vec<Event> = result
+            .events
+            .into_iter()
+            .filter_map(|e| {
+                chrono::DateTime::parse_from_rfc3339(&e.start)
+                    .ok()
+                    .map(|dt| Event {
+                        title: e.title,
+                        description: e.description,
+                        start: dt.with_timezone(&chrono::Utc),
+                        // Cap duration at 180 minutes
+                        duration: e.duration.min(180),
+                    })
             })
-        }).collect();
+            .collect();
 
-        let category = serde_json::from_str(&format!("\"{}\"", result.category))
-            .unwrap_or(Category::Other);
+        let category =
+            serde_json::from_str(&format!("\"{}\"", result.category)).unwrap_or(Category::Other);
 
         Ok(Structured {
             title: result.title,
@@ -447,25 +472,35 @@ impl LlmClient {
         let existing_items_context = if existing_items.is_empty() {
             String::new()
         } else {
-            let items_list: Vec<String> = existing_items.iter()
+            let items_list: Vec<String> = existing_items
+                .iter()
                 .map(|item| {
-                    let due_str = item.due_at
+                    let due_str = item
+                        .due_at
                         .map(|d| d.to_rfc3339())
                         .unwrap_or_else(|| "No due date".to_string());
-                    let completed = if item.completed { "✓ Completed" } else { "Pending" };
-                    format!("  • {} (Due: {}) [{}]", item.description, due_str, completed)
+                    let completed = if item.completed {
+                        "✓ Completed"
+                    } else {
+                        "Pending"
+                    };
+                    format!(
+                        "  • {} (Due: {}) [{}]",
+                        item.description, due_str, completed
+                    )
                 })
                 .collect();
-            format!("\n\nEXISTING ACTION ITEMS FROM PAST 2 DAYS ({} items):\n{}",
+            format!(
+                "\n\nEXISTING ACTION ITEMS FROM PAST 2 DAYS ({} items):\n{}",
                 items_list.len(),
-                items_list.join("\n"))
+                items_list.join("\n")
+            )
         };
 
         // Build calendar context section
         let calendar_prompt_section = match calendar_context {
-            Some(ctx) if !ctx.title.is_empty() => {
-                ACTION_ITEMS_CALENDAR_SECTION.replace("{calendar_context_str}", &ctx.to_context_string())
-            }
+            Some(ctx) if !ctx.title.is_empty() => ACTION_ITEMS_CALENDAR_SECTION
+                .replace("{calendar_context_str}", &ctx.to_context_string()),
             _ => String::new(),
         };
 
@@ -498,7 +533,9 @@ impl LlmClient {
             "required": ["action_items"]
         });
 
-        let response = self.call_with_schema(&prompt, Some(0.7), Some(1500), Some(schema)).await?;
+        let response = self
+            .call_with_schema(&prompt, Some(0.7), Some(1500), Some(schema))
+            .await?;
 
         #[derive(Deserialize)]
         struct ActionItemsResponse {
@@ -517,11 +554,17 @@ impl LlmClient {
 
         let result: ActionItemsResponse = parse_or_repair_json(&response, "action items")?;
 
-        let items: Vec<ActionItem> = result.action_items.into_iter()
+        let items: Vec<ActionItem> = result
+            .action_items
+            .into_iter()
             .filter(|item| {
                 let conf = item.confidence.unwrap_or(0.0);
                 if conf < 0.75 {
-                    tracing::info!("Filtering out low-confidence action item ({}): {}", conf, item.description);
+                    tracing::info!(
+                        "Filtering out low-confidence action item ({}): {}",
+                        conf,
+                        item.description
+                    );
                     false
                 } else {
                     true
@@ -530,7 +573,9 @@ impl LlmClient {
             .map(|item| ActionItem {
                 description: item.description,
                 completed: false,
-                due_at: item.due_at.and_then(|d| chrono::DateTime::parse_from_rfc3339(&d).ok())
+                due_at: item
+                    .due_at
+                    .and_then(|d| chrono::DateTime::parse_from_rfc3339(&d).ok())
                     .map(|dt| dt.with_timezone(&chrono::Utc)),
                 confidence: item.confidence,
                 priority: item.priority,
@@ -556,20 +601,24 @@ impl LlmClient {
         let existing_memories_str = if existing_memories.is_empty() {
             "(No existing memories)".to_string()
         } else {
-            existing_memories.iter()
+            existing_memories
+                .iter()
                 .take(100) // Limit context size
-                .map(|m| format!("- [{}] {}",
-                    match m.category {
-                        MemoryCategory::System => "system",
-                        MemoryCategory::Interesting => "interesting",
-                        MemoryCategory::Manual => "manual",
-                        MemoryCategory::Core => "core",
-                        MemoryCategory::Hobbies => "hobbies",
-                        MemoryCategory::Lifestyle => "lifestyle",
-                        MemoryCategory::Interests => "interests",
-                    },
-                    m.content
-                ))
+                .map(|m| {
+                    format!(
+                        "- [{}] {}",
+                        match m.category {
+                            MemoryCategory::System => "system",
+                            MemoryCategory::Interesting => "interesting",
+                            MemoryCategory::Manual => "manual",
+                            MemoryCategory::Core => "core",
+                            MemoryCategory::Hobbies => "hobbies",
+                            MemoryCategory::Lifestyle => "lifestyle",
+                            MemoryCategory::Interests => "interests",
+                        },
+                        m.content
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
         };
@@ -598,7 +647,9 @@ impl LlmClient {
             "required": ["memories"]
         });
 
-        let response = self.call_with_schema(&prompt, Some(0.5), Some(1000), Some(schema)).await?;
+        let response = self
+            .call_with_schema(&prompt, Some(0.5), Some(1000), Some(schema))
+            .await?;
 
         #[derive(Deserialize)]
         struct MemoriesResponse {
@@ -638,9 +689,12 @@ impl LlmClient {
                     }
                     interesting_count += 1;
                 }
-                MemoryCategory::System | MemoryCategory::Manual |
-                MemoryCategory::Core | MemoryCategory::Hobbies |
-                MemoryCategory::Lifestyle | MemoryCategory::Interests => {
+                MemoryCategory::System
+                | MemoryCategory::Manual
+                | MemoryCategory::Core
+                | MemoryCategory::Hobbies
+                | MemoryCategory::Lifestyle
+                | MemoryCategory::Interests => {
                     if system_count >= 2 {
                         continue;
                     }
@@ -679,7 +733,8 @@ impl LlmClient {
             existing_action_items,
             existing_memories,
             None,
-        ).await
+        )
+        .await
     }
 
     /// Skip all LLM extraction for non-desktop sources.
@@ -718,7 +773,11 @@ impl LlmClient {
 
         // Brief transcripts: use simplified processing (no action items/memories extraction)
         if word_count < BRIEF_TRANSCRIPT_THRESHOLD {
-            tracing::info!("Brief transcript ({} words < {}), using simplified processing", word_count, BRIEF_TRANSCRIPT_THRESHOLD);
+            tracing::info!(
+                "Brief transcript ({} words < {}), using simplified processing",
+                word_count,
+                BRIEF_TRANSCRIPT_THRESHOLD
+            );
             let structured = self.extract_brief_structure(&transcript, language).await?;
             return Ok(ProcessedConversation {
                 discarded: false,
@@ -732,17 +791,28 @@ impl LlmClient {
         tracing::info!("Full transcript processing ({} words)", word_count);
 
         // Step 1: Extract structure (title, overview, emoji, category, events)
-        let structured = self.extract_structure(&transcript, started_at, timezone, language, calendar_context).await?;
+        let structured = self
+            .extract_structure(
+                &transcript,
+                started_at,
+                timezone,
+                language,
+                calendar_context,
+            )
+            .await?;
 
         // Step 2: Extract action items (non-fatal — conversation still saved if this fails)
-        let action_items = match self.extract_action_items(
-            &transcript,
-            started_at,
-            timezone,
-            language,
-            existing_action_items,
-            calendar_context,
-        ).await {
+        let action_items = match self
+            .extract_action_items(
+                &transcript,
+                started_at,
+                timezone,
+                language,
+                existing_action_items,
+                calendar_context,
+            )
+            .await
+        {
             Ok(items) => items,
             Err(e) => {
                 tracing::warn!("Action items extraction failed (non-fatal): {}", e);
@@ -751,7 +821,10 @@ impl LlmClient {
         };
 
         // Step 3: Extract memories (non-fatal — conversation still saved if this fails)
-        let memories = match self.extract_memories(&transcript, user_name, existing_memories).await {
+        let memories = match self
+            .extract_memories(&transcript, user_name, existing_memories)
+            .await
+        {
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!("Memories extraction failed (non-fatal): {}", e);
@@ -792,10 +865,7 @@ impl LlmClient {
         // Build context about the conversation
         let context = format!(
             "CONVERSATION CONTEXT:\nTitle: {}\nCategory: {:?}\nOverview: {}\n\nTRANSCRIPT:\n{}",
-            structured.title,
-            structured.category,
-            structured.overview,
-            transcript
+            structured.title, structured.category, structured.overview, transcript
         );
 
         // Build the full prompt
@@ -810,7 +880,12 @@ impl LlmClient {
     }
 
     /// Call Gemini API with text (non-JSON) response
-    pub async fn call_text(&self, prompt: &str, temperature: Option<f32>, max_tokens: Option<i32>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn call_text(
+        &self,
+        prompt: &str,
+        temperature: Option<f32>,
+        max_tokens: Option<i32>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         #[derive(Debug, Serialize)]
         struct GeminiTextRequest {
             contents: Vec<GeminiContent>,
@@ -844,12 +919,7 @@ impl LlmClient {
             self.model, self.api_key
         );
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&request).send().await?;
 
         if !response.status().is_success() {
             let error = response.text().await?;
@@ -857,7 +927,9 @@ impl LlmClient {
         }
 
         let result: GeminiResponse = response.json().await?;
-        Ok(result.candidates.first()
+        Ok(result
+            .candidates
+            .first()
             .and_then(|c| c.content.parts.first())
             .map(|p| p.text.clone())
             .unwrap_or_default())
@@ -885,7 +957,9 @@ impl LlmClient {
             "required": ["requires_context"]
         });
 
-        let response = self.call_with_schema(prompt, Some(0.1), Some(50), Some(schema)).await?;
+        let response = self
+            .call_with_schema(prompt, Some(0.1), Some(50), Some(schema))
+            .await?;
 
         #[derive(Deserialize)]
         struct RequiresContextResponse {
@@ -902,7 +976,8 @@ impl LlmClient {
     pub async fn extract_date_range(
         &self,
         prompt: &str,
-    ) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>, Box<dyn std::error::Error + Send + Sync>>
+    {
         let schema = serde_json::json!({
             "type": "object",
             "properties": {
@@ -922,7 +997,9 @@ impl LlmClient {
             "required": ["has_date_reference"]
         });
 
-        let response = self.call_with_schema(prompt, Some(0.1), Some(200), Some(schema)).await?;
+        let response = self
+            .call_with_schema(prompt, Some(0.1), Some(200), Some(schema))
+            .await?;
 
         #[derive(Deserialize)]
         struct DateRangeResponse {
@@ -938,11 +1015,13 @@ impl LlmClient {
         }
 
         // Parse dates
-        let start = result.start_date
+        let start = result
+            .start_date
             .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&Utc));
 
-        let end = result.end_date
+        let end = result
+            .end_date
             .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&Utc));
 
@@ -966,7 +1045,11 @@ impl LlmClient {
         let memories_context = if memories.is_empty() {
             "No memories available yet - this appears to be a new user.".to_string()
         } else {
-            let mem_list: Vec<String> = memories.iter().take(10).map(|m| format!("- {}", m)).collect();
+            let mem_list: Vec<String> = memories
+                .iter()
+                .take(10)
+                .map(|m| format!("- {}", m))
+                .collect();
             format!("User facts and memories:\n{}", mem_list.join("\n"))
         };
 
@@ -1020,7 +1103,11 @@ Return ONLY the greeting text, nothing else."#,
             .iter()
             .take(6) // Only use first 6 messages for title generation
             .map(|(text, sender)| {
-                let role = if sender == "human" { "User" } else { "Assistant" };
+                let role = if sender == "human" {
+                    "User"
+                } else {
+                    "Assistant"
+                };
                 format!("{}: {}", role, text)
             })
             .collect();
@@ -1154,9 +1241,12 @@ Return relationships as source -> relationship -> target triples."#,
             "required": ["entities", "relationships"]
         });
 
-        let response = self.call_with_schema(&prompt, Some(0.3), Some(1000), Some(schema)).await?;
+        let response = self
+            .call_with_schema(&prompt, Some(0.3), Some(1000), Some(schema))
+            .await?;
 
-        let result: ExtractedKnowledge = parse_or_repair_json(&response, "knowledge graph extraction")?;
+        let result: ExtractedKnowledge =
+            parse_or_repair_json(&response, "knowledge graph extraction")?;
 
         Ok(result)
     }
@@ -1174,8 +1264,7 @@ mod tests {
 
     #[test]
     fn with_model_overrides_default() {
-        let client = LlmClient::new("test-key".to_string())
-            .with_model("gemini-pro-latest");
+        let client = LlmClient::new("test-key".to_string()).with_model("gemini-pro-latest");
         assert_eq!(client.model, "gemini-pro-latest");
     }
 

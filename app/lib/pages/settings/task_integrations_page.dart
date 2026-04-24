@@ -249,7 +249,7 @@ class _TaskIntegrationsPageState extends State<TaskIntegrationsPage> with Widget
               );
             }
             await context.read<TaskIntegrationProvider>().setSelectedApp(app);
-            // Note: OAuth callback will save connection to Firebase
+            // Note: OAuth callback will save connection to backend storage
             // Provider will refresh when user returns to this page
             Logger.debug('✓ Task integration enabled: ${app.displayName} (${app.key}) - authentication in progress');
           } else {

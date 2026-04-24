@@ -16,8 +16,6 @@ pydantic-settings==2.10.1
 pydantic_core==2.20.1
 
 # Google Cloud
-firebase-admin==6.5.0
-google-cloud-firestore==2.17.0
 google-cloud-storage==2.18.0
 google-cloud-translate==3.20.2
 google-auth==2.32.0
@@ -77,6 +75,7 @@ tiktoken==0.7.0
 jiwer==3.0.4
 python-ulid==3.0.0
 pytz==2024.1
+psycopg[binary]==3.2.12
 
 # Payment & communication
 stripe==11.3.0

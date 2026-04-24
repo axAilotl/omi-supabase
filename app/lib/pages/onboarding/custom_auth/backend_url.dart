@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:omi/backend/preferences.dart';
+import 'package:omi/env/env.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 
 class CustomBackendURLForm extends StatefulWidget {
@@ -12,6 +14,14 @@ class CustomBackendURLForm extends StatefulWidget {
 class _CustomBackendURLFormState extends State<CustomBackendURLForm> {
   final _formKey = GlobalKey<FormState>();
   final _urlController = TextEditingController();
+
+  @override
+  void initState() {
+    _urlController.text = SharedPreferencesUtil().customBackendUrl.isNotEmpty
+        ? SharedPreferencesUtil().customBackendUrl
+        : (Env.defaultApiBaseUrl ?? '');
+    super.initState();
+  }
 
   // Function to validate the URL
   String? _validateURL(String? value, BuildContext context) {
@@ -33,16 +43,14 @@ class _CustomBackendURLFormState extends State<CustomBackendURLForm> {
     return null;
   }
 
-  void _submitForm() {
+  Future<void> _submitForm() async {
     if (_formKey.currentState!.validate()) {
-      // Form is valid, proceed further
-      String backendURL = _urlController.text;
-
-      // Print or save the backend URL as needed
-      print('Custom Backend URL: $backendURL');
-
-      // Show a success message
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.backendUrlSavedSuccess)));
+      final backendURL = _urlController.text.trim();
+      await SharedPreferencesUtil().setCustomBackendUrl(backendURL);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.l10n.apiEnvSavedRestartRequired)));
     }
   }
 

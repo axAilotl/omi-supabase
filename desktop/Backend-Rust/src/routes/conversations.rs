@@ -60,7 +60,11 @@ async fn get_conversations(
     let statuses: Vec<String> = if query.statuses.is_empty() {
         vec![]
     } else {
-        query.statuses.split(',').map(|s| s.trim().to_string()).collect()
+        query
+            .statuses
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect()
     };
 
     tracing::info!(
@@ -106,7 +110,10 @@ async fn get_conversations(
         }
         Err(e) => {
             tracing::error!("Failed to get conversations: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get conversations: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get conversations: {}", e),
+            ))
         }
     }
 }
@@ -133,7 +140,11 @@ async fn get_conversations_count(
     let statuses: Vec<String> = if query.statuses.is_empty() {
         vec![]
     } else {
-        query.statuses.split(',').map(|s| s.trim().to_string()).collect()
+        query
+            .statuses
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect()
     };
 
     tracing::info!(
@@ -151,7 +162,10 @@ async fn get_conversations_count(
         Ok(count) => Ok(Json(ConversationsCountResponse { count })),
         Err(e) => {
             tracing::error!("Failed to get conversations count: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get conversations count: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get conversations count: {}", e),
+            ))
         }
     }
 }
@@ -173,7 +187,8 @@ async fn create_conversation_from_segments(
         );
         return Err((
             StatusCode::GONE,
-            "This endpoint is deprecated. Desktop app now uses Python POST /v1/conversations.".to_string(),
+            "This endpoint is deprecated. Desktop app now uses Python POST /v1/conversations."
+                .to_string(),
         ));
     }
 
@@ -190,8 +205,7 @@ async fn create_conversation_from_segments(
     let processed = if is_desktop {
         // Get LLM client (Gemini)
         let llm_client = if let Some(api_key) = &state.config.gemini_api_key {
-            LlmClient::new(api_key.clone())
-                .with_model(crate::llm::model_qos::gemini_extraction())
+            LlmClient::new(api_key.clone()).with_model(crate::llm::model_qos::gemini_extraction())
         } else {
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -210,7 +224,19 @@ async fn create_conversation_from_segments(
         let two_days_ago = (chrono::Utc::now() - chrono::Duration::days(2)).to_rfc3339();
         let mut existing_action_items: Vec<crate::models::ActionItem> = state
             .firestore
-            .get_action_items(&user.uid, 50, 0, None, None, Some(&two_days_ago), None, None, None, None, None)
+            .get_action_items(
+                &user.uid,
+                50,
+                0,
+                None,
+                None,
+                Some(&two_days_ago),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap_or_default()
             .into_iter()
@@ -255,7 +281,10 @@ async fn create_conversation_from_segments(
             })?
     } else {
         // Non-desktop: skip all LLM extraction (Python backend handles it)
-        tracing::info!("Skipping LLM extraction for non-desktop source {:?}", request.source);
+        tracing::info!(
+            "Skipping LLM extraction for non-desktop source {:?}",
+            request.source
+        );
         LlmClient::skip_extraction()
     };
 
@@ -293,7 +322,11 @@ async fn create_conversation_from_segments(
     };
 
     // Save conversation
-    if let Err(e) = state.firestore.save_conversation(&user.uid, &conversation).await {
+    if let Err(e) = state
+        .firestore
+        .save_conversation(&user.uid, &conversation)
+        .await
+    {
         tracing::error!("Failed to save conversation: {}", e);
         return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
     }
@@ -407,11 +440,12 @@ async fn reprocess_conversation(
         .await
         .map_err(|e| {
             tracing::error!("Failed to get conversation: {}", e);
-            (StatusCode::NOT_FOUND, format!("Conversation not found: {}", e))
+            (
+                StatusCode::NOT_FOUND,
+                format!("Conversation not found: {}", e),
+            )
         })?
-        .ok_or_else(|| {
-            (StatusCode::NOT_FOUND, "Conversation not found".to_string())
-        })?;
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Conversation not found".to_string()))?;
 
     // Fetch the app
     let app = state
@@ -422,9 +456,7 @@ async fn reprocess_conversation(
             tracing::error!("Failed to get app: {}", e);
             (StatusCode::NOT_FOUND, format!("App not found: {}", e))
         })?
-        .ok_or_else(|| {
-            (StatusCode::NOT_FOUND, "App not found".to_string())
-        })?;
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "App not found".to_string()))?;
 
     // Check if app has memories capability
     if !app.capabilities.contains(&"memories".to_string()) {
@@ -435,14 +467,13 @@ async fn reprocess_conversation(
     }
 
     // Get the app's memory prompt
-    let memory_prompt = app.memory_prompt.unwrap_or_else(|| {
-        "Analyze this conversation and provide insights.".to_string()
-    });
+    let memory_prompt = app
+        .memory_prompt
+        .unwrap_or_else(|| "Analyze this conversation and provide insights.".to_string());
 
     // Get LLM client (Gemini)
     let llm_client = if let Some(api_key) = &state.config.gemini_api_key {
-        LlmClient::new(api_key.clone())
-            .with_model(crate::llm::model_qos::gemini_extraction())
+        LlmClient::new(api_key.clone()).with_model(crate::llm::model_qos::gemini_extraction())
     } else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -455,7 +486,11 @@ async fn reprocess_conversation(
         .transcript_segments
         .iter()
         .map(|s| {
-            let speaker = if s.is_user { user.name.clone().unwrap_or_else(|| "User".to_string()) } else { format!("Speaker {}", s.speaker_id) };
+            let speaker = if s.is_user {
+                user.name.clone().unwrap_or_else(|| "User".to_string())
+            } else {
+                format!("Speaker {}", s.speaker_id)
+            };
             format!("{}: {}", speaker, s.text)
         })
         .collect::<Vec<_>>()
@@ -467,7 +502,10 @@ async fn reprocess_conversation(
         .await
         .map_err(|e| {
             tracing::error!("Failed to run memory prompt: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to process: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to process: {}", e),
+            )
         })?;
 
     // Save the app result to the conversation
@@ -532,13 +570,26 @@ async fn search_conversations(
     // Fetch all conversations (we'll filter in memory since Firestore doesn't support full-text search)
     let all_conversations = match state
         .firestore
-        .get_conversations(&user.uid, 500, 0, request.include_discarded, &["completed".to_string()], None, None, None, None)
+        .get_conversations(
+            &user.uid,
+            500,
+            0,
+            request.include_discarded,
+            &["completed".to_string()],
+            None,
+            None,
+            None,
+            None,
+        )
         .await
     {
         Ok(convs) => convs,
         Err(e) => {
             tracing::error!("Failed to get conversations for search: {}", e);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to search: {}", e)));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to search: {}", e),
+            ));
         }
     };
 
@@ -548,7 +599,11 @@ async fn search_conversations(
         .into_iter()
         .filter(|conv| {
             let title_match = conv.structured.title.to_lowercase().contains(&query_lower);
-            let overview_match = conv.structured.overview.to_lowercase().contains(&query_lower);
+            let overview_match = conv
+                .structured
+                .overview
+                .to_lowercase()
+                .contains(&query_lower);
             title_match || overview_match
         })
         .collect();
@@ -563,7 +618,11 @@ async fn search_conversations(
         .take(request.per_page)
         .collect();
 
-    tracing::info!("Search found {} total matches, returning {} items", total_count, items.len());
+    tracing::info!(
+        "Search found {} total matches, returning {} items",
+        total_count,
+        items.len()
+    );
 
     Ok(Json(SearchConversationsResponse {
         items,
@@ -638,7 +697,10 @@ async fn get_conversation_by_id(
         Ok(None) => Err((StatusCode::NOT_FOUND, "Conversation not found".to_string())),
         Err(e) => {
             tracing::error!("Failed to get conversation: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get conversation: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get conversation: {}", e),
+            ))
         }
     }
 }
@@ -688,7 +750,7 @@ async fn update_conversation(
             .update_conversation_title(&user.uid, &conversation_id, title)
             .await
         {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(e) => {
                 tracing::error!("Failed to update conversation title: {}", e);
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -871,12 +933,14 @@ async fn merge_conversations(
                 Ok(processed) => {
                     merged_conversation.structured = processed.structured;
                     // Append "(merged)" to title to indicate this is a merged conversation
-                    merged_conversation.structured.title = format!("{} (merged)", merged_conversation.structured.title);
+                    merged_conversation.structured.title =
+                        format!("{} (merged)", merged_conversation.structured.title);
                     merged_conversation.status = ConversationStatus::Completed;
 
                     // Save action items as staged tasks
                     if !processed.action_items.is_empty() {
-                        let source_str = format!("transcription:{:?}", merged_conversation.source).to_lowercase();
+                        let source_str = format!("transcription:{:?}", merged_conversation.source)
+                            .to_lowercase();
                         for item in &processed.action_items {
                             let _ = state
                                 .firestore
@@ -931,7 +995,11 @@ async fn merge_conversations(
 
     // Delete source conversations
     for conv_id in &request.conversation_ids {
-        if let Err(e) = state.firestore.delete_conversation(&user.uid, conv_id).await {
+        if let Err(e) = state
+            .firestore
+            .delete_conversation(&user.uid, conv_id)
+            .await
+        {
             tracing::warn!("Failed to delete source conversation {}: {}", conv_id, e);
             // Continue anyway - merged conversation is already saved
         }
@@ -1060,7 +1128,10 @@ async fn set_conversation_visibility(
 
         if is_public {
             // Store the uid mapping and add to public set
-            if let Err(e) = redis.store_conversation_to_uid(&conversation_id, &user.uid).await {
+            if let Err(e) = redis
+                .store_conversation_to_uid(&conversation_id, &user.uid)
+                .await
+            {
                 tracing::error!("Failed to store conversation visibility in Redis: {}", e);
                 // Continue anyway - Firestore has the source of truth
             }
@@ -1104,18 +1175,27 @@ async fn get_shared_conversation(
         match redis.get_conversation_uid(&conversation_id).await {
             Ok(Some(uid)) => uid,
             Ok(None) => {
-                tracing::info!("Conversation {} not found in Redis (not shared)", conversation_id);
+                tracing::info!(
+                    "Conversation {} not found in Redis (not shared)",
+                    conversation_id
+                );
                 return Err((StatusCode::NOT_FOUND, "Conversation is private".to_string()));
             }
             Err(e) => {
                 tracing::error!("Redis error looking up conversation: {}", e);
-                return Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to lookup conversation".to_string()));
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to lookup conversation".to_string(),
+                ));
             }
         }
     } else {
         // No Redis - can't serve shared conversations
         tracing::error!("Redis not configured - cannot serve shared conversations");
-        return Err((StatusCode::SERVICE_UNAVAILABLE, "Sharing service unavailable".to_string()));
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Sharing service unavailable".to_string(),
+        ));
     };
 
     // Fetch the conversation from Firestore
@@ -1180,13 +1260,12 @@ pub fn conversations_routes() -> Router<AppState> {
             "/v1/conversations/:id/visibility",
             patch(set_conversation_visibility),
         )
-        .route(
-            "/v1/conversations/:id/shared",
-            get(get_shared_conversation),
-        )
+        .route("/v1/conversations/:id/shared", get(get_shared_conversation))
         .route(
             "/v1/conversations/:id",
-            get(get_conversation_by_id).patch(update_conversation).delete(delete_conversation),
+            get(get_conversation_by_id)
+                .patch(update_conversation)
+                .delete(delete_conversation),
         )
 }
 

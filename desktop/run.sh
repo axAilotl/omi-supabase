@@ -61,7 +61,6 @@ if [ "$1" = "--yolo" ]; then
     export OMI_API_URL="https://desktop-backend-hhibjajaja-uc.a.run.app"
     export OMI_PYTHON_API_URL="https://api.omi.me"
     export OMI_AUTH_URL="https://omi-desktop-auth-208440318997.us-central1.run.app/"
-    export FIREBASE_API_KEY="AIzaSyD9dzBdglc7IO9pPDIOvqnCoTis_xKkkC8"
 fi
 
 # Clear system OPENAI_API_KEY so .env takes precedence
@@ -352,7 +351,9 @@ else
 fi
 
 # ─── Start Python auth service ────────────────────────────────────────
-if [ "${OMI_SKIP_AUTH:-0}" != "1" ]; then
+if [ "${OMI_BACKEND_MODE:-${BACKEND_MODE:-supabase}}" = "supabase" ]; then
+    substep "Skipping auth service in Supabase mode — local Rust backend serves /v1/auth"
+elif [ "${OMI_SKIP_AUTH:-0}" != "1" ]; then
     step "Starting Python auth service (port $AUTH_PORT)..."
     if [ -d "$AUTH_DIR" ]; then
         # Set up venv if needed
@@ -524,26 +525,15 @@ else
     echo "OMI_API_URL=$EFFECTIVE_API_URL" >> "$APP_BUNDLE/Contents/Resources/.env"
 fi
 substep "OMI_API_URL=$EFFECTIVE_API_URL"
-# Bootstrap FIREBASE_API_KEY — check env var first (yolo mode), then backend .env
-if ! grep -q "^FIREBASE_API_KEY=" "$APP_BUNDLE/Contents/Resources/.env"; then
-    FIREBASE_KEY="${FIREBASE_API_KEY:-}"
-    if [ -z "$FIREBASE_KEY" ] && [ -f "$BACKEND_DIR/.env" ]; then
-        FIREBASE_KEY=$(grep "^FIREBASE_API_KEY=" "$BACKEND_DIR/.env" | head -1 | cut -d= -f2-)
-    fi
-    if [ -n "$FIREBASE_KEY" ]; then
-        echo "FIREBASE_API_KEY=$FIREBASE_KEY" >> "$APP_BUNDLE/Contents/Resources/.env"
-        substep "Bootstrapped FIREBASE_API_KEY"
-    fi
-fi
-# Bootstrap OMI_AUTH_URL — check env var first (yolo mode), then backend .env, then local auth
+# Bootstrap OMI_AUTH_URL — check env var first (yolo mode), then backend .env, then local backend
 if ! grep -q "^OMI_AUTH_URL=" "$APP_BUNDLE/Contents/Resources/.env"; then
     AUTH_URL="${OMI_AUTH_URL:-}"
     if [ -z "$AUTH_URL" ] && [ -f "$BACKEND_DIR/.env" ]; then
         AUTH_URL=$(grep "^OMI_AUTH_URL=" "$BACKEND_DIR/.env" | head -1 | cut -d= -f2-)
     fi
     if [ -z "$AUTH_URL" ]; then
-        AUTH_URL="http://localhost:${AUTH_PORT}/"
-        substep "OMI_AUTH_URL not set — defaulting to local auth service: $AUTH_URL"
+        AUTH_URL="$EFFECTIVE_API_URL"
+        substep "OMI_AUTH_URL not set — defaulting to local backend auth routes: $AUTH_URL"
     fi
     echo "OMI_AUTH_URL=$AUTH_URL" >> "$APP_BUNDLE/Contents/Resources/.env"
     substep "Set OMI_AUTH_URL=$AUTH_URL"

@@ -13,7 +13,7 @@ import Foundation
 /// NOTE: Deepgram and Gemini keys are NO LONGER fetched from the backend —
 /// they are proxied server-side (issue #5861).
 /// NOTE: ElevenLabs key is NO LONGER fetched — proxied via /v1/tts/synthesize (issue #6622).
-/// Anthropic, Firebase, and Calendar keys are still served via /v1/config/api-keys.
+/// Anthropic and Calendar keys are still served via /v1/config/api-keys.
 
 /// Keys that participate in the BYOK free-plan flow.
 enum BYOKProvider: String, CaseIterable {
@@ -56,7 +56,6 @@ final class APIKeyService: ObservableObject {
     // Backend-provided keys (in-memory only, never persisted to disk)
     @Published private(set) var geminiApiKey: String?
     @Published private(set) var anthropicApiKey: String?
-    @Published private(set) var firebaseApiKey: String?
     @Published private(set) var googleCalendarApiKey: String?
     @Published private(set) var isLoaded: Bool = false
     @Published private(set) var loadError: String?
@@ -88,15 +87,11 @@ final class APIKeyService: ObservableObject {
         nonEmpty(UserDefaults.standard.string(forKey: "dev_anthropic_api_key")) ?? anthropicApiKey
     }
 
-    var effectiveFirebaseApiKey: String? {
-        firebaseApiKey
-    }
-
     var effectiveGoogleCalendarApiKey: String? {
         googleCalendarApiKey
     }
 
-    /// Fetch keys from the backend. Call after Firebase auth is ready.
+    /// Fetch keys from the backend. Call after auth is ready.
     func fetchKeys() async {
         loadError = nil
 
@@ -106,14 +101,13 @@ final class APIKeyService: ObservableObject {
                 let keys = try await APIClient.shared.fetchApiKeys()
                 self.geminiApiKey = keys.geminiApiKey
                 self.anthropicApiKey = keys.anthropicApiKey
-                self.firebaseApiKey = keys.firebaseApiKey
                 self.googleCalendarApiKey = keys.googleCalendarApiKey
                 self.isLoaded = true
 
                 // Set env vars so existing getenv() consumers keep working during transition
                 applyToEnvironment()
 
-                log("APIKeyService: Fetched keys from backend (gemini=\(keys.geminiApiKey != nil), anthropic=\(keys.anthropicApiKey != nil), firebase=\(keys.firebaseApiKey != nil), calendar=\(keys.googleCalendarApiKey != nil))")
+                log("APIKeyService: Fetched keys from backend (gemini=\(keys.geminiApiKey != nil), anthropic=\(keys.anthropicApiKey != nil), calendar=\(keys.googleCalendarApiKey != nil))")
                 return
             } catch {
                 let delay = pow(2.0, Double(attempt - 1))
@@ -135,15 +129,12 @@ final class APIKeyService: ObservableObject {
     func clear() {
         geminiApiKey = nil
         anthropicApiKey = nil
-        firebaseApiKey = nil
         googleCalendarApiKey = nil
         isLoaded = false
         loadError = nil
 
         unsetenv("GEMINI_API_KEY")
         unsetenv("ANTHROPIC_API_KEY")
-        // NOTE: Do NOT unset FIREBASE_API_KEY — it's needed for the next sign-in
-        // (auth bootstrap requires Firebase key before backend is reachable)
         unsetenv("GOOGLE_CALENDAR_API_KEY")
     }
 
@@ -154,9 +145,6 @@ final class APIKeyService: ObservableObject {
         }
         if let key = effectiveAnthropicKey {
             setenv("ANTHROPIC_API_KEY", key, 1)
-        }
-        if let key = effectiveFirebaseApiKey {
-            setenv("FIREBASE_API_KEY", key, 1)
         }
         if let key = effectiveGoogleCalendarApiKey {
             setenv("GOOGLE_CALENDAR_API_KEY", key, 1)

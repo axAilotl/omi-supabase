@@ -73,50 +73,20 @@ function generate_ios_custom_config() {
 }
 
 ######################################
-# Setup Firebase with prebuilt configs
+# Setup local platform config scaffolding
 ######################################
-function setup_firebase() {
+function setup_platform_configs() {
   mkdir -p android/app/src/dev/ ios/Config/Dev/ ios/Runner/
-  cp setup/prebuilt/firebase_options.dart lib/firebase_options_dev.dart
-  cp setup/prebuilt/google-services.json android/app/src/dev/
-  cp setup/prebuilt/GoogleService-Info.plist ios/Config/Dev/
-  cp setup/prebuilt/GoogleService-Info.plist ios/Runner/
-
-  # Warn: Mocking, should remove
   mkdir -p android/app/src/prod/ ios/Config/Prod/
-  cp setup/prebuilt/firebase_options.dart lib/firebase_options_prod.dart
-  cp setup/prebuilt/google-services.json android/app/src/prod/
-  cp setup/prebuilt/GoogleService-Info.plist ios/Config/Prod/
-}
-
-##########################################
-# Setup Firebase with Service Account Json
-##########################################
-function setup_firebase_with_service_account() {
-  dart pub global activate flutterfire_cli
-  flutterfire config \
-    --platforms="android,ios,web" \
-    --out=lib/firebase_options_dev.dart \
-    --ios-bundle-id=com.friend-app-with-wearable.ios12.development \
-    --android-app-id=com.friend.ios.dev \
-    --android-out=android/app/src/dev/  \
-    --ios-out=ios/Config/Dev/ \
-    --service-account="$FIREBASE_SERVICE_ACCOUNT_KEY" \
-    --project="based-hardware-dev" \
-    --ios-target="Runner" \
-    --yes
-
-  flutterfire config \
-    --platforms="android,ios,web" \
-    --out=lib/firebase_options_prod.dart \
-    --ios-bundle-id=com.friend-app-with-wearable.ios12 \
-    --android-app-id=com.friend.ios.dev \
-    --android-out=android/app/src/prod/ \
-    --ios-out=ios/Config/Prod/ \
-    --service-account="$FIREBASE_SERVICE_ACCOUNT_KEY" \
-    --project="based-hardware-dev" \
-    --ios-target="Runner" \
-    --yes
+  cat > ios/Config/Dev/GoogleService-Info.plist <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict/>
+</plist>
+EOF
+  cp ios/Config/Dev/GoogleService-Info.plist ios/Config/Prod/GoogleService-Info.plist
+  cp ios/Config/Dev/GoogleService-Info.plist ios/Runner/GoogleService-Info.plist
 }
 
 ######################################
@@ -173,14 +143,14 @@ function run_build_ios() {
 
 case "${1}" in
   ios)
-      setup_firebase \
+      setup_platform_configs \
       && generate_ios_custom_config \
       && setup_app_env \
       && run_build_ios
     ;;
   android)
     setup_keystore_android \
-      && setup_firebase \
+      && setup_platform_configs \
       && setup_app_env \
       && run_build_android
     ;;

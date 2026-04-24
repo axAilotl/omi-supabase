@@ -55,7 +55,10 @@ async fn get_memories(
         Ok(memories) => Ok(Json(memories)),
         Err(e) => {
             tracing::error!("Failed to get memories: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get memories: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get memories: {}", e),
+            ))
         }
     }
 }
@@ -210,7 +213,11 @@ async fn update_memory_read(
     Path(memory_id): Path<String>,
     Json(request): Json<UpdateMemoryReadRequest>,
 ) -> Result<Json<MemoryDB>, StatusCode> {
-    tracing::info!("Updating read status for memory {} for user {}", memory_id, user.uid);
+    tracing::info!(
+        "Updating read status for memory {} for user {}",
+        memory_id,
+        user.uid
+    );
 
     match state
         .firestore

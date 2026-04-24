@@ -182,12 +182,14 @@ impl App {
 
     /// Check if app has external integration
     pub fn works_externally(&self) -> bool {
-        self.capabilities.contains(&"external_integration".to_string())
+        self.capabilities
+            .contains(&"external_integration".to_string())
     }
 
     /// Check if app can send proactive notifications
     pub fn has_proactive_notifications(&self) -> bool {
-        self.capabilities.contains(&"proactive_notification".to_string())
+        self.capabilities
+            .contains(&"proactive_notification".to_string())
     }
 }
 
@@ -346,22 +348,70 @@ pub struct SearchAppsQuery {
 /// Static app categories (matching Python backend / production API)
 pub fn get_app_categories() -> Vec<AppCategory> {
     vec![
-        AppCategory { id: "conversation-analysis".to_string(), title: "Conversation Analysis".to_string() },
-        AppCategory { id: "personality-emulation".to_string(), title: "Personality Clone".to_string() },
-        AppCategory { id: "health-and-wellness".to_string(), title: "Health".to_string() },
-        AppCategory { id: "education-and-learning".to_string(), title: "Education".to_string() },
-        AppCategory { id: "communication-improvement".to_string(), title: "Communication".to_string() },
-        AppCategory { id: "emotional-and-mental-support".to_string(), title: "Emotional Support".to_string() },
-        AppCategory { id: "productivity-and-organization".to_string(), title: "Productivity".to_string() },
-        AppCategory { id: "entertainment-and-fun".to_string(), title: "Entertainment".to_string() },
-        AppCategory { id: "financial".to_string(), title: "Financial".to_string() },
-        AppCategory { id: "travel-and-exploration".to_string(), title: "Travel".to_string() },
-        AppCategory { id: "safety-and-security".to_string(), title: "Safety".to_string() },
-        AppCategory { id: "shopping-and-commerce".to_string(), title: "Shopping".to_string() },
-        AppCategory { id: "social-and-relationships".to_string(), title: "Social".to_string() },
-        AppCategory { id: "news-and-information".to_string(), title: "News".to_string() },
-        AppCategory { id: "utilities-and-tools".to_string(), title: "Utilities".to_string() },
-        AppCategory { id: "other".to_string(), title: "Other".to_string() },
+        AppCategory {
+            id: "conversation-analysis".to_string(),
+            title: "Conversation Analysis".to_string(),
+        },
+        AppCategory {
+            id: "personality-emulation".to_string(),
+            title: "Personality Clone".to_string(),
+        },
+        AppCategory {
+            id: "health-and-wellness".to_string(),
+            title: "Health".to_string(),
+        },
+        AppCategory {
+            id: "education-and-learning".to_string(),
+            title: "Education".to_string(),
+        },
+        AppCategory {
+            id: "communication-improvement".to_string(),
+            title: "Communication".to_string(),
+        },
+        AppCategory {
+            id: "emotional-and-mental-support".to_string(),
+            title: "Emotional Support".to_string(),
+        },
+        AppCategory {
+            id: "productivity-and-organization".to_string(),
+            title: "Productivity".to_string(),
+        },
+        AppCategory {
+            id: "entertainment-and-fun".to_string(),
+            title: "Entertainment".to_string(),
+        },
+        AppCategory {
+            id: "financial".to_string(),
+            title: "Financial".to_string(),
+        },
+        AppCategory {
+            id: "travel-and-exploration".to_string(),
+            title: "Travel".to_string(),
+        },
+        AppCategory {
+            id: "safety-and-security".to_string(),
+            title: "Safety".to_string(),
+        },
+        AppCategory {
+            id: "shopping-and-commerce".to_string(),
+            title: "Shopping".to_string(),
+        },
+        AppCategory {
+            id: "social-and-relationships".to_string(),
+            title: "Social".to_string(),
+        },
+        AppCategory {
+            id: "news-and-information".to_string(),
+            title: "News".to_string(),
+        },
+        AppCategory {
+            id: "utilities-and-tools".to_string(),
+            title: "Utilities".to_string(),
+        },
+        AppCategory {
+            id: "other".to_string(),
+            title: "Other".to_string(),
+        },
     ]
 }
 
@@ -399,11 +449,26 @@ pub fn get_app_capabilities() -> Vec<AppCapabilityDef> {
 /// Get capabilities list for v2/apps grouping (matching Python backend order)
 pub fn get_v2_capabilities() -> Vec<CapabilityInfo> {
     vec![
-        CapabilityInfo { id: "popular".to_string(), title: "Featured".to_string() },
-        CapabilityInfo { id: "external_integration".to_string(), title: "Integrations".to_string() },
-        CapabilityInfo { id: "chat".to_string(), title: "Chat Assistants".to_string() },
-        CapabilityInfo { id: "memories".to_string(), title: "Summary Apps".to_string() },
-        CapabilityInfo { id: "proactive_notification".to_string(), title: "Realtime Notifications".to_string() },
+        CapabilityInfo {
+            id: "popular".to_string(),
+            title: "Featured".to_string(),
+        },
+        CapabilityInfo {
+            id: "external_integration".to_string(),
+            title: "Integrations".to_string(),
+        },
+        CapabilityInfo {
+            id: "chat".to_string(),
+            title: "Chat Assistants".to_string(),
+        },
+        CapabilityInfo {
+            id: "memories".to_string(),
+            title: "Summary Apps".to_string(),
+        },
+        CapabilityInfo {
+            id: "proactive_notification".to_string(),
+            title: "Realtime Notifications".to_string(),
+        },
     ]
 }
 

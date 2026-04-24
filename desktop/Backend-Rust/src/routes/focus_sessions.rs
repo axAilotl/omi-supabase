@@ -69,7 +69,10 @@ async fn get_focus_sessions(
         Ok(sessions) => Ok(Json(sessions)),
         Err(e) => {
             tracing::error!("Failed to get focus sessions: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get focus sessions: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get focus sessions: {}", e),
+            ))
         }
     }
 }
@@ -80,7 +83,11 @@ async fn delete_focus_session(
     user: AuthUser,
     Path(session_id): Path<String>,
 ) -> Result<Json<FocusSessionStatusResponse>, StatusCode> {
-    tracing::info!("Deleting focus session {} for user {}", session_id, user.uid);
+    tracing::info!(
+        "Deleting focus session {} for user {}",
+        session_id,
+        user.uid
+    );
 
     match state
         .firestore
@@ -103,9 +110,9 @@ async fn get_focus_stats(
     user: AuthUser,
     Query(query): Query<GetFocusStatsQuery>,
 ) -> Result<Json<FocusStats>, StatusCode> {
-    let date = query.date.unwrap_or_else(|| {
-        chrono::Utc::now().format("%Y-%m-%d").to_string()
-    });
+    let date = query
+        .date
+        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
 
     tracing::info!("Getting focus stats for user {} on date {}", user.uid, date);
 
@@ -124,6 +131,9 @@ pub fn focus_sessions_routes() -> Router<AppState> {
             "/v1/focus-sessions",
             get(get_focus_sessions).post(create_focus_session),
         )
-        .route("/v1/focus-sessions/:id", axum::routing::delete(delete_focus_session))
+        .route(
+            "/v1/focus-sessions/:id",
+            axum::routing::delete(delete_focus_session),
+        )
         .route("/v1/focus-stats", get(get_focus_stats))
 }

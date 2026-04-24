@@ -543,14 +543,14 @@ def get_auth_session(session_id: str) -> dict:
 
 
 @try_catch_decorator
-def set_auth_code(auth_code: str, firebase_token: str, ttl: int = 300):
-    """Store auth code with Firebase token (default 5 minutes)"""
-    r.set(f'auth_code:{auth_code}', firebase_token, ex=ttl)
+def set_auth_code(auth_code: str, access_token: str, ttl: int = 300):
+    """Store auth code with backend access token (default 5 minutes)"""
+    r.set(f'auth_code:{auth_code}', access_token, ex=ttl)
 
 
 @try_catch_decorator
 def get_auth_code(auth_code: str) -> str:
-    """Retrieve Firebase token by auth code"""
+    """Retrieve backend access token by auth code"""
     token = r.get(f'auth_code:{auth_code}')
     return token.decode('utf-8') if token else None
 
@@ -636,7 +636,8 @@ def remove_conversation_summary_app_id(app_id: str) -> bool:
 # Lua script: atomic increment + TTL in a single round-trip.
 # Returns [current_count, ttl_remaining].  Sets TTL on first hit
 # and self-heals any key that lost its TTL (prevents permanent buckets).
-_RATE_LIMIT_LUA = r.register_script("""
+_RATE_LIMIT_LUA = r.register_script(
+    """
 local key = KEYS[1]
 local window = tonumber(ARGV[1])
 local current = redis.call('INCR', key)
@@ -649,7 +650,8 @@ if ttl < 0 then
     ttl = window
 end
 return {current, ttl}
-""")
+"""
+)
 
 
 def check_rate_limit(key: str, policy: str, max_requests: int, window: int) -> tuple[bool, int, int]:

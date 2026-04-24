@@ -2,12 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'package:omi/env/env.dart';
+import 'package:omi/services/auth_service.dart';
 import 'package:omi/utils/logger.dart';
 
 /// File-based logging for agent chat — works in release builds (print/developer.log are stripped).
@@ -64,11 +64,10 @@ class AgentChatService {
     }
     _connected = false;
 
-    final user = FirebaseAuth.instance.currentUser;
     agentLog('[TIMING] cleanup done +${connectSw.elapsedMilliseconds}ms');
-    final token = await user?.getIdToken();
+    final token = await AuthService.instance.getIdToken();
     if (token == null) {
-      agentLog('ERROR: no Firebase user/token');
+      agentLog('ERROR: no auth token');
       return false;
     }
     agentLog('[TIMING] token fetched +${connectSw.elapsedMilliseconds}ms');

@@ -87,21 +87,37 @@ void main() {
     }
   });
 
+  group('getMissingWals', () {
+    test('returns miss and corrupted WALs as pending uploads', () async {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      sync.testWals = [
+        _makeWal(timerStart: now - 30, status: WalStatus.miss, storage: WalStorage.disk),
+        _makeWal(timerStart: now - 20, status: WalStatus.corrupted, storage: WalStorage.disk),
+        _makeWal(timerStart: now - 10, status: WalStatus.synced, storage: WalStorage.disk),
+      ];
+
+      final result = await sync.getMissingWals();
+
+      expect(result.length, 2);
+      expect(result.map((w) => w.status), [WalStatus.miss, WalStatus.corrupted]);
+    });
+  });
+
   group('getSessionUnsyncedWals', () {
-    test('returns only miss+disk WALs within session window', () {
+    test('returns pending disk WALs within session window', () {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       final sessionStart = now - 300; // 5 minutes ago
 
       sync.testWals = [
         _makeWal(timerStart: sessionStart + 10, status: WalStatus.miss, storage: WalStorage.disk),
-        _makeWal(timerStart: sessionStart + 60, status: WalStatus.miss, storage: WalStorage.disk),
+        _makeWal(timerStart: sessionStart + 60, status: WalStatus.corrupted, storage: WalStorage.disk),
         _makeWal(timerStart: sessionStart + 120, status: WalStatus.synced, storage: WalStorage.disk),
       ];
 
       final result = sync.getSessionUnsyncedWals(sessionStart);
 
       expect(result.length, 2);
-      expect(result.every((w) => w.status == WalStatus.miss), true);
+      expect(result.map((w) => w.status), [WalStatus.miss, WalStatus.corrupted]);
       expect(result.every((w) => w.storage == WalStorage.disk), true);
       expect(result[0].timerStart, sessionStart + 10);
       expect(result[1].timerStart, sessionStart + 60);
@@ -124,14 +140,14 @@ void main() {
       expect(result[0].storage, WalStorage.disk);
     });
 
-    test('excludes WALs outside session window', () {
+    test('excludes WALs outside session overlap window', () {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       final sessionStart = now - 120; // 2 minutes ago
 
       sync.testWals = [
-        // Before session window
+        // Before session overlap window
         _makeWal(timerStart: sessionStart - 600, status: WalStatus.miss, storage: WalStorage.disk),
-        _makeWal(timerStart: sessionStart - 1, status: WalStatus.miss, storage: WalStorage.disk),
+        _makeWal(timerStart: sessionStart - 240, status: WalStatus.miss, storage: WalStorage.disk, device: 'old'),
         // Inside session window
         _makeWal(timerStart: sessionStart, status: WalStatus.miss, storage: WalStorage.disk),
         _makeWal(timerStart: sessionStart + 60, status: WalStatus.miss, storage: WalStorage.disk),

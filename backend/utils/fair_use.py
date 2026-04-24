@@ -22,7 +22,7 @@ from utils.subscription import has_transcription_credits, is_paid_plan
 # Deferred imports — exception to CLAUDE.md top-level import rule.
 # classify_user_purpose: fair_use_classifier.py constructs ChatOpenAI at import time,
 #   which raises openai.OpenAIError if OPENAI_API_KEY is not set.
-# send_notification: imports firebase_admin.messaging which requires Firebase app init.
+# send_notification: notification setup may depend on external runtime configuration.
 # Both are only called in async runtime paths, never at import time.
 _classify_user_purpose = None
 _send_notification = None

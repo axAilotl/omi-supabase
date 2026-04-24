@@ -578,6 +578,10 @@ class SharedPreferencesUtil {
 
   set authToken(String value) => saveString('authToken', value);
 
+  String get refreshToken => getString('refreshToken');
+
+  set refreshToken(String value) => saveString('refreshToken', value);
+
   int get tokenExpirationTime => getInt('tokenExpirationTime');
 
   set tokenExpirationTime(int value) => saveInt('tokenExpirationTime', value);
@@ -609,6 +613,16 @@ class SharedPreferencesUtil {
   bool get companionAssociationPrompted => getBool('companionAssociationPrompted');
 
   //------------------------ TestFlight API Environment ----------------------//
+
+  String get customBackendUrl => getString('customBackendUrl');
+
+  Future<bool> setCustomBackendUrl(String value) async {
+    final normalized = value.trim();
+    if (normalized.isEmpty) return clearCustomBackendUrl();
+    return saveString('customBackendUrl', normalized);
+  }
+
+  Future<bool> clearCustomBackendUrl() async => remove('customBackendUrl');
 
   /// Which API environment the TestFlight user prefers: 'staging' or 'production'.
   /// Default is 'production' so new TestFlight installs hit prod by default.

@@ -133,6 +133,25 @@ void main() {
       expect(sync.testWals[2].conversationId, isNull);
     });
 
+    test('stamps WALs that overlap the session window by timestamp', () async {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      sync.testWals = [
+        Wal(
+          timerStart: now - 130,
+          codec: BleAudioCodec.opus,
+          seconds: 60,
+          status: WalStatus.miss,
+          storage: WalStorage.disk,
+        ),
+      ];
+
+      await sync.stampConversationId(now - 100, 'conv-overlap');
+
+      expect(sync.testWals[0].conversationId, 'conv-overlap');
+      expect(sync.testWals[0].retryCount, 0);
+      expect(sync.testWals[0].lastRetryAt, 0);
+    });
+
     test('does not re-stamp WALs that already have a conversationId', () async {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       sync.testWals = [
@@ -161,7 +180,7 @@ void main() {
       sync = LocalWalSyncImpl(listener);
     });
 
-    test('returns miss+disk WALs with conversationId', () {
+    test('returns pending disk WALs with conversationId', () {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       sync.testWals = [
         Wal(
@@ -171,6 +190,13 @@ void main() {
             status: WalStatus.miss,
             storage: WalStorage.disk,
             conversationId: 'conv-1'),
+        Wal(
+            timerStart: now - 80,
+            codec: BleAudioCodec.opus,
+            seconds: 60,
+            status: WalStatus.corrupted,
+            storage: WalStorage.disk,
+            conversationId: 'conv-corrupted'),
         Wal(
             timerStart: now - 50,
             codec: BleAudioCodec.opus,
@@ -187,11 +213,12 @@ void main() {
       ];
 
       final orphaned = sync.getOrphanedWals();
-      expect(orphaned.length, 1);
+      expect(orphaned.length, 2);
       expect(orphaned[0].conversationId, 'conv-1');
+      expect(orphaned[1].conversationId, 'conv-corrupted');
     });
 
-    test('excludes WALs with retryCount >= 3', () {
+    test('excludes retry-capped orphaned WALs before cooldown', () {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       sync.testWals = [
         Wal(
@@ -201,11 +228,56 @@ void main() {
             status: WalStatus.miss,
             storage: WalStorage.disk,
             conversationId: 'conv-1',
-            retryCount: 3),
+            retryCount: 3,
+            lastRetryAt: now - 60),
       ];
 
       final orphaned = sync.getOrphanedWals();
       expect(orphaned, isEmpty);
+    });
+
+    test('returns retry-capped orphaned WALs after cooldown', () {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      sync.testWals = [
+        Wal(
+          timerStart: now - 100,
+          codec: BleAudioCodec.opus,
+          seconds: 60,
+          status: WalStatus.miss,
+          storage: WalStorage.disk,
+          conversationId: 'conv-stale',
+          retryCount: 3,
+          lastRetryAt: now - 301,
+        ),
+      ];
+
+      final orphaned = sync.getOrphanedWals();
+      expect(orphaned.length, 1);
+      expect(orphaned[0].conversationId, 'conv-stale');
+    });
+
+    test('returns recent unassigned pending WALs for timestamp recovery', () {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      sync.testWals = [
+        Wal(
+          timerStart: now - 100,
+          codec: BleAudioCodec.opus,
+          seconds: 60,
+          status: WalStatus.miss,
+          storage: WalStorage.disk,
+        ),
+        Wal(
+          timerStart: now - 100,
+          codec: BleAudioCodec.opus,
+          seconds: 60,
+          status: WalStatus.synced,
+          storage: WalStorage.disk,
+        ),
+      ];
+
+      final pending = sync.getUnassignedPendingWals();
+      expect(pending.length, 1);
+      expect(pending[0].status, WalStatus.miss);
     });
 
     test('returns empty when no orphaned WALs exist', () {
@@ -268,8 +340,7 @@ void main() {
       if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
     });
 
-    test('drains all frames including tail buffer when losses exceed threshold', () async {
-      // Need > 10 * framesPerSecond (1000) unsynced frames to trigger storage.
+    test('drains all frames including tail buffer when frames are not acknowledged', () async {
       // Add 1100 frames (11 seconds at 100fps), all unsynced.
       for (int i = 0; i < 1100; i++) {
         sync.onFrameCaptured(WalFrame(payload: [0, 1, 2], syncKey: FrameSyncKey([i & 0xFF])));
@@ -280,14 +351,14 @@ void main() {
 
       // All frames should be drained
       expect(sync.testFrames, isEmpty);
-      // A WAL should have been created (losses >= threshold)
+      // A WAL should have been created for retry.
       expect(sync.testWals.length, 1);
       expect(sync.testWals[0].status, WalStatus.miss);
       expect(sync.testWals[0].seconds, 11);
     });
 
-    test('skips storage when all frames were synced via WebSocket', () async {
-      // Add 200 frames (2s), all synced — should NOT create a WAL
+    test('skips storage when all frames have an explicit durable acknowledgement', () async {
+      // Add 200 frames (2s), all acknowledged — should NOT create a WAL
       for (int i = 0; i < 200; i++) {
         final key = FrameSyncKey([i & 0xFF]);
         sync.onFrameCaptured(WalFrame(payload: [0, 1, 2], syncKey: key));
@@ -297,7 +368,7 @@ void main() {
       await sync.finalizeCurrentSession();
 
       expect(sync.testFrames, isEmpty);
-      // No WAL created because all frames were synced (shouldStored = false)
+      // No WAL created because all frames were acknowledged.
       expect(sync.testWals, isEmpty);
     });
 
@@ -306,8 +377,7 @@ void main() {
       expect(sync.testWals, isEmpty);
     });
 
-    test('exactly 10*fps unsynced frames triggers storage (>= boundary)', () async {
-      // Exactly 1000 unsynced frames = 10 * 100fps. shouldStored uses >= threshold.
+    test('stores exactly 10 seconds of unacknowledged frames', () async {
       for (int i = 0; i < 1000; i++) {
         sync.onFrameCaptured(WalFrame(payload: [0, 1, 2], syncKey: FrameSyncKey([i & 0xFF])));
       }
@@ -315,14 +385,12 @@ void main() {
       await sync.finalizeCurrentSession();
 
       expect(sync.testFrames, isEmpty);
-      // 1000 losses >= 1000 threshold, so WAL IS stored
       expect(sync.testWals.length, 1);
       expect(sync.testWals[0].status, WalStatus.miss);
       expect(sync.testWals[0].seconds, 10);
     });
 
-    test('just below threshold does NOT trigger storage', () async {
-      // 999 unsynced frames < 1000 threshold
+    test('stores short unacknowledged tails below the old loss threshold', () async {
       for (int i = 0; i < 999; i++) {
         sync.onFrameCaptured(WalFrame(payload: [0, 1, 2], syncKey: FrameSyncKey([i & 0xFF])));
       }
@@ -330,11 +398,12 @@ void main() {
       await sync.finalizeCurrentSession();
 
       expect(sync.testFrames, isEmpty);
-      expect(sync.testWals, isEmpty);
+      expect(sync.testWals.length, 1);
+      expect(sync.testWals[0].status, WalStatus.miss);
+      expect(sync.testWals[0].seconds, 9);
     });
 
-    test('marks WAL synced when all frames are synced in tail buffer', () async {
-      // Add 1100 frames, all synced — WAL should be created with status synced
+    test('does not create a WAL when all frames are acknowledged in tail buffer', () async {
       for (int i = 0; i < 1100; i++) {
         final key = FrameSyncKey([i & 0xFF]);
         sync.onFrameCaptured(WalFrame(payload: [0, 1, 2], syncKey: key));
@@ -344,7 +413,6 @@ void main() {
       await sync.finalizeCurrentSession();
 
       expect(sync.testFrames, isEmpty);
-      // shouldStored is false because losses (0) <= threshold (1000), no WAL created
       expect(sync.testWals, isEmpty);
     });
   });
@@ -381,7 +449,7 @@ void main() {
       if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
     });
 
-    test('only stamps WALs with timerStart >= sessionStartSeconds', () async {
+    test('stamps WALs that overlap the session start grace window', () async {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       sync.testWals = [
         Wal(
@@ -401,7 +469,7 @@ void main() {
       // Session started at now - 100, so only wal at now - 50 qualifies
       await sync.stampConversationId(now - 100, 'conv-boundary');
 
-      expect(sync.testWals[0].conversationId, isNull); // timerStart < sessionStart
+      expect(sync.testWals[0].conversationId, 'conv-boundary'); // overlaps via grace window
       expect(sync.testWals[1].conversationId, 'conv-boundary');
     });
 

@@ -1,16 +1,23 @@
-'use client';
+"use client";
 
-import { createContext, useContext, useEffect, useState, ReactNode, useRef, useCallback } from 'react';
-import { User } from 'firebase/auth';
 import {
-  auth,
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  ReactNode,
+  useRef,
+  useCallback,
+} from "react";
+import {
+  type User,
   onAuthStateChange,
   signInWithGoogle,
   signInWithApple,
   signOutUser,
   getIdToken,
-} from '@/lib/firebase';
-import { MixpanelManager } from '@/lib/analytics/mixpanel';
+} from "@/lib/firebase";
+import { MixpanelManager } from "@/lib/analytics/mixpanel";
 
 interface AuthContextType {
   user: User | null;
@@ -62,9 +69,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const handleSignInWithGoogle = async () => {
     try {
       await signInWithGoogle();
-      MixpanelManager.track('Sign In Completed', { method: 'google' });
+      MixpanelManager.track("Sign In Completed", { method: "google" });
     } catch (error) {
-      console.error('Failed to sign in with Google:', error);
+      console.error("Failed to sign in with Google:", error);
       throw error;
     }
   };
@@ -72,20 +79,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const handleSignInWithApple = async () => {
     try {
       await signInWithApple();
-      MixpanelManager.track('Sign In Completed', { method: 'apple' });
+      MixpanelManager.track("Sign In Completed", { method: "apple" });
     } catch (error) {
-      console.error('Failed to sign in with Apple:', error);
+      console.error("Failed to sign in with Apple:", error);
       throw error;
     }
   };
 
   const handleSignOut = async () => {
     try {
-      MixpanelManager.track('Sign Out');
+      MixpanelManager.track("Sign Out");
       MixpanelManager.reset();
       await signOutUser();
     } catch (error) {
-      console.error('Failed to sign out:', error);
+      console.error("Failed to sign out:", error);
       throw error;
     }
   };
@@ -112,7 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
 }

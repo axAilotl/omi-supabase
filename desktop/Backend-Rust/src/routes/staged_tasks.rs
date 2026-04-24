@@ -92,7 +92,10 @@ async fn get_staged_tasks(
         }
         Err(e) => {
             tracing::error!("Failed to get staged tasks: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get staged tasks: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get staged tasks: {}", e),
+            ))
         }
     }
 }
@@ -169,11 +172,7 @@ async fn promote_staged_task(
     tracing::info!("Promote staged task requested for user {}", user.uid);
 
     // Step 1: Get active AI tasks and their descriptions for dedup
-    let active_ai_items = match state
-        .firestore
-        .get_active_ai_action_items(&user.uid)
-        .await
-    {
+    let active_ai_items = match state.firestore.get_active_ai_action_items(&user.uid).await {
         Ok(items) => items,
         Err(e) => {
             tracing::error!("Failed to get active AI items: {}", e);
@@ -190,7 +189,10 @@ async fn promote_staged_task(
     if active_count >= 5 {
         return Ok(Json(PromoteResponse {
             promoted: false,
-            reason: Some(format!("Already have {} active AI tasks (max 5)", active_count)),
+            reason: Some(format!(
+                "Already have {} active AI tasks (max 5)",
+                active_count
+            )),
             promoted_task: None,
         }));
     }
@@ -258,10 +260,7 @@ async fn promote_staged_task(
 
     // Clean up all duplicates in the background
     for dup_id in &duplicate_ids {
-        let _ = state
-            .firestore
-            .delete_staged_task(&user.uid, dup_id)
-            .await;
+        let _ = state.firestore.delete_staged_task(&user.uid, dup_id).await;
     }
     if !duplicate_ids.is_empty() {
         tracing::info!(
@@ -295,8 +294,8 @@ async fn promote_staged_task(
             top_task.category.as_deref(),
             top_task.relevance_score,
             Some(true), // from_staged: promoted from staged_tasks
-            None, // recurrence_rule
-            None, // recurrence_parent_id
+            None,       // recurrence_rule
+            None,       // recurrence_parent_id
         )
         .await
     {
@@ -453,7 +452,10 @@ async fn migrate_ai_tasks(
         }));
     }
 
-    tracing::info!("Migration: moving {} AI tasks via batch commits", tasks_to_move.len());
+    tracing::info!(
+        "Migration: moving {} AI tasks via batch commits",
+        tasks_to_move.len()
+    );
 
     let migrated_count = match state
         .firestore
@@ -509,9 +511,18 @@ pub fn staged_tasks_routes() -> Router<AppState> {
             "/v1/staged-tasks",
             get(get_staged_tasks).post(create_staged_task),
         )
-        .route("/v1/staged-tasks/batch-scores", patch(batch_update_staged_scores))
+        .route(
+            "/v1/staged-tasks/batch-scores",
+            patch(batch_update_staged_scores),
+        )
         .route("/v1/staged-tasks/promote", post(promote_staged_task))
         .route("/v1/staged-tasks/migrate", post(migrate_ai_tasks))
-        .route("/v1/staged-tasks/migrate-conversation-items", post(migrate_conversation_items))
-        .route("/v1/staged-tasks/:id", axum::routing::delete(delete_staged_task))
+        .route(
+            "/v1/staged-tasks/migrate-conversation-items",
+            post(migrate_conversation_items),
+        )
+        .route(
+            "/v1/staged-tasks/:id",
+            axum::routing::delete(delete_staged_task),
+        )
 }

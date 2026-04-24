@@ -1,0 +1,85 @@
+name: omi-supabase-local
+
+services:
+  pusher:
+    image: omi-full-supabase/pusher:local
+    build:
+      context: .
+      dockerfile: backend/pusher/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    network_mode: host
+    command:
+      [
+        "uvicorn",
+        "pusher.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "3031",
+        "--ws-ping-interval",
+        "20",
+        "--ws-ping-timeout",
+        "20",
+        "--loop",
+        "uvloop",
+      ]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3031/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: omi-full-supabase/backend:local
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    network_mode: host
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3030", "--loop", "uvloop"]
+    environment:
+      HOSTED_PUSHER_API_URL: http://127.0.0.1:3031
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      pusher:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3030/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  web-home:
+    image: omi-full-supabase/web-home:local
+    build:
+      context: .
+      dockerfile: web/app/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://omi.local.vega.nyc}
+        NEXT_PUBLIC_WS_BASE_URL: ${NEXT_PUBLIC_WS_BASE_URL:-wss://omi.local.vega.nyc}
+        NEXT_PUBLIC_MIXPANEL_TOKEN: ${NEXT_PUBLIC_MIXPANEL_TOKEN:-}
+        NEXT_PUBLIC_FIREBASE_API_KEY: ${NEXT_PUBLIC_FIREBASE_API_KEY:-}
+        NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN:-}
+        NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${NEXT_PUBLIC_FIREBASE_PROJECT_ID:-}
+        NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ${NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET:-}
+        NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID:-}
+        NEXT_PUBLIC_FIREBASE_APP_ID: ${NEXT_PUBLIC_FIREBASE_APP_ID:-}
+        NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: ${NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID:-}
+        NEXT_PUBLIC_FIREBASE_VAPID_KEY: ${NEXT_PUBLIC_FIREBASE_VAPID_KEY:-}
+    restart: unless-stopped
+    env_file:
+      - ./web/app/.env.local
+    environment:
+      PORT: "3110"
+      HOSTNAME: 0.0.0.0
+    network_mode: host
+    depends_on:
+      backend:
+        condition: service_healthy

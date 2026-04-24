@@ -7,19 +7,74 @@ use axum::{
     routing::{delete, get},
     Json, Router,
 };
+use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashSet;
 
 use crate::auth::AuthUser;
 use crate::models::{
-    DailySummarySettings, NotificationSettings, PrivateCloudSync, RecordingPermission,
-    TranscriptionPreferences, UpdateDailySummaryRequest, UpdateLanguageRequest,
-    AIUserProfile, UpdateAIUserProfileRequest, UpdateNotificationSettingsRequest,
+    AIUserProfile, AssistantSettingsData, DailySummarySettings, NotificationSettings,
+    PrivateCloudSync, RecordingPermission, TranscriptionPreferences, UpdateAIUserProfileRequest,
+    UpdateDailySummaryRequest, UpdateLanguageRequest, UpdateNotificationSettingsRequest,
     UpdateTranscriptionPreferencesRequest, UpdateUserProfileRequest, UserLanguage, UserProfile,
-    UserSettingsStatusResponse, AssistantSettingsData,
+    UserSettingsStatusResponse,
 };
 use crate::services::firestore::{LLM_USAGE_SUBCOLLECTION, SCREEN_ACTIVITY_SUBCOLLECTION};
 use crate::AppState;
+
+fn resolve_supabase_auth_url(state: &AppState) -> Result<String, StatusCode> {
+    if let Some(auth_url) = &state.config.supabase_auth_url {
+        return Ok(auth_url.trim_end_matches('/').to_string());
+    }
+    if let Some(base_url) = &state.config.supabase_url {
+        return Ok(format!("{}/auth/v1", base_url.trim_end_matches('/')));
+    }
+    tracing::error!("SUPABASE_AUTH_URL / SUPABASE_URL not set — cannot delete Supabase user");
+    Err(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn resolve_supabase_service_role_key(state: &AppState) -> Result<String, StatusCode> {
+    state
+        .config
+        .supabase_service_role_key
+        .clone()
+        .ok_or_else(|| {
+            tracing::error!("SUPABASE_SERVICE_ROLE_KEY not set — cannot delete Supabase user");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
+async fn delete_supabase_auth_user(state: &AppState, uid: &str) -> Result<(), StatusCode> {
+    let auth_url = resolve_supabase_auth_url(state)?;
+    let service_role_key = resolve_supabase_service_role_key(state)?;
+    let response = Client::new()
+        .delete(format!("{}/admin/users/{}", auth_url, uid))
+        .header("apikey", service_role_key.clone())
+        .bearer_auth(service_role_key)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to call Supabase delete-user admin API: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if response.status().is_success() || response.status().as_u16() == 404 {
+        return Ok(());
+    }
+
+    let status = response.status();
+    let error_text = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "unknown error".to_string());
+    tracing::error!(
+        "Supabase delete-user admin API failed for {}: {} {}",
+        uid,
+        status,
+        error_text
+    );
+    Err(StatusCode::INTERNAL_SERVER_ERROR)
+}
 
 // ============================================================================
 // Daily Summary Settings
@@ -112,7 +167,11 @@ async fn update_transcription_preferences(
 
     match state
         .firestore
-        .update_transcription_preferences(&user.uid, request.single_language_mode, request.vocabulary)
+        .update_transcription_preferences(
+            &user.uid,
+            request.single_language_mode,
+            request.vocabulary,
+        )
         .await
     {
         Ok(prefs) => Ok(Json(prefs)),
@@ -432,7 +491,10 @@ async fn update_ai_profile(
 
     // Truncate to 10000 bytes if needed (don't reject), respecting char boundaries
     let profile_text = if request.profile_text.len() > 10000 {
-        tracing::warn!("Profile text truncated: {} chars -> 10000", request.profile_text.len());
+        tracing::warn!(
+            "Profile text truncated: {} chars -> 10000",
+            request.profile_text.len()
+        );
         let mut end = 10000;
         while !request.profile_text.is_char_boundary(end) {
             end -= 1;
@@ -544,13 +606,19 @@ async fn update_assistant_settings(
     if let Some(ref floating_bar) = request.floating_bar {
         if let Some(ref api_key) = floating_bar.elevenlabs_api_key {
             if api_key.len() > 512 {
-                tracing::warn!("ElevenLabs API key too long: {} chars (max 512)", api_key.len());
+                tracing::warn!(
+                    "ElevenLabs API key too long: {} chars (max 512)",
+                    api_key.len()
+                );
                 return Err(StatusCode::BAD_REQUEST);
             }
         }
         if let Some(ref voice_id) = floating_bar.elevenlabs_voice_id {
             if voice_id.len() > 128 {
-                tracing::warn!("ElevenLabs voice id too long: {} chars (max 128)", voice_id.len());
+                tracing::warn!(
+                    "ElevenLabs voice id too long: {} chars (max 128)",
+                    voice_id.len()
+                );
                 return Err(StatusCode::BAD_REQUEST);
             }
         }
@@ -605,7 +673,17 @@ async fn delete_account(
     let action_items = state
         .firestore
         .get_action_items(
-            &user.uid, 5000, 0, None, None, None, None, None, None, None, Some(true),
+            &user.uid,
+            5000,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(true),
         )
         .await
         .map_err(|e| {
@@ -741,16 +819,23 @@ async fn delete_account(
 
     // Goals (active + completed)
     let mut goal_ids = HashSet::new();
-    let active_goals = state.firestore.get_user_goals(&user.uid, 5000).await.map_err(|e| {
-        tracing::error!("Failed to list active goals during delete-account: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let active_goals = state
+        .firestore
+        .get_user_goals(&user.uid, 5000)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to list active goals during delete-account: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     let completed_goals = state
         .firestore
         .get_completed_goals(&user.uid, 5000)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to list completed goals during delete-account: {}", e);
+            tracing::error!(
+                "Failed to list completed goals during delete-account: {}",
+                e
+            );
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     for goal in active_goals {
@@ -812,7 +897,10 @@ async fn delete_account(
         .delete_kg_data(&user.uid)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to delete knowledge graph during delete-account: {}", e);
+            tracing::error!(
+                "Failed to delete knowledge graph during delete-account: {}",
+                e
+            );
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
@@ -822,7 +910,10 @@ async fn delete_account(
         .delete_all_documents_in_subcollection(&user.uid, SCREEN_ACTIVITY_SUBCOLLECTION)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to delete screen activity during delete-account: {}", e);
+            tracing::error!(
+                "Failed to delete screen activity during delete-account: {}",
+                e
+            );
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     state
@@ -840,27 +931,14 @@ async fn delete_account(
         .delete_user_root_document(&user.uid)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to delete root user document during delete-account: {}", e);
+            tracing::error!(
+                "Failed to delete root user document during delete-account: {}",
+                e
+            );
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    // Delete Firebase Auth account via admin API (service account OAuth).
-    let project_id = state
-        .config
-        .firebase_project_id
-        .clone()
-        .ok_or_else(|| {
-            tracing::error!("FIREBASE_PROJECT_ID not set — cannot delete Firebase Auth account");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-    state
-        .firestore
-        .delete_firebase_auth_user(&project_id, &user.uid)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to delete Firebase Auth account for {}: {}", user.uid, e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    delete_supabase_auth_user(&state, &user.uid).await?;
 
     tracing::info!("Account deletion completed for user {}", user.uid);
     Ok(Json(UserSettingsStatusResponse {

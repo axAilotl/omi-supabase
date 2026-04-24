@@ -148,18 +148,18 @@ def delete_account(
             except Exception as e:
                 logger.info(f'delete_account feedback store failed: {sanitize(str(e))}')
 
-        # 2. Revoke Firebase auth immediately so tokens are useless and the
-        #    account cannot be logged back into while the data wipe runs.
+        # 2. Delete the auth account immediately so tokens become useless and
+        #    the account cannot be logged back into while the data wipe runs.
         try:
             auth.delete_account(uid)
         except Exception as e:
             err = str(e).upper()
             if 'USER_NOT_FOUND' in err or 'NO USER RECORD' in err:
-                logger.info(f'delete_account firebase user already gone for {uid}')
+                logger.info(f'delete_account auth user already gone for {uid}')
             else:
                 raise
 
-        # 3. Wipe Firestore subcollections in the background — can take minutes
+        # 3. Wipe persisted user data in the background — can take minutes
         #    for heavy users and would otherwise time out at the load balancer.
         threading.Thread(target=_background_wipe_user_data, args=(uid,), daemon=True).start()
 

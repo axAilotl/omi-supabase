@@ -30,7 +30,11 @@ async fn create_chat_session(
 
     match state
         .firestore
-        .create_chat_session(&user.uid, request.title.as_deref(), request.app_id.as_deref())
+        .create_chat_session(
+            &user.uid,
+            request.title.as_deref(),
+            request.app_id.as_deref(),
+        )
         .await
     {
         Ok(session) => Ok(Json(session)),
@@ -70,7 +74,10 @@ async fn get_chat_sessions(
         Ok(sessions) => Ok(Json(sessions)),
         Err(e) => {
             tracing::error!("Failed to get chat sessions: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get chat sessions: {}", e)))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get chat sessions: {}", e),
+            ))
         }
     }
 }
@@ -81,11 +88,7 @@ async fn get_chat_session(
     user: AuthUser,
     Path(session_id): Path<String>,
 ) -> Result<Json<ChatSessionDB>, StatusCode> {
-    tracing::info!(
-        "Getting chat session {} for user {}",
-        session_id,
-        user.uid
-    );
+    tracing::info!("Getting chat session {} for user {}", session_id, user.uid);
 
     match state
         .firestore
@@ -144,11 +147,7 @@ async fn delete_chat_session(
     user: AuthUser,
     Path(session_id): Path<String>,
 ) -> Result<Json<ChatSessionStatusResponse>, StatusCode> {
-    tracing::info!(
-        "Deleting chat session {} for user {}",
-        session_id,
-        user.uid
-    );
+    tracing::info!("Deleting chat session {} for user {}", session_id, user.uid);
 
     // Delete the session and cascade delete messages
     match state

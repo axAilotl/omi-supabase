@@ -285,6 +285,46 @@ class TestProcessSegmentPreferences:
             {'timestamp': [0.5, 1.0], 'speaker': 'SPEAKER_00', 'text': 'world'},
         ]
 
+    def test_local_segment_uses_deepgram_bytes_not_signed_url(self, tmp_path):
+        """Local sync segments should upload bytes to Deepgram instead of requiring a public signed URL."""
+        from routers.sync import process_segment
+
+        wav_path = tmp_path / '1700000000.wav'
+        wav_path.write_bytes(b'fake-wav-bytes')
+
+        response = {'new_memories': set(), 'updated_memories': set()}
+        lock = threading.Lock()
+        errors = []
+
+        with (
+            patch('routers.sync.process_conversation') as mock_process,
+            patch('routers.sync.get_closest_conversation_to_timestamps', return_value=None),
+            patch('routers.sync.deepgram_prerecorded') as mock_url_dg,
+            patch('routers.sync.deepgram_prerecorded_from_bytes') as mock_bytes_dg,
+            patch('routers.sync.get_syncing_file_temporal_signed_url') as mock_signed_url,
+        ):
+            mock_bytes_dg.return_value = (self._make_mock_words(), 'en')
+            mock_process.return_value = MagicMock(id='test-id')
+
+            process_segment(
+                str(wav_path),
+                'uid123',
+                response,
+                lock,
+                errors,
+                transcription_prefs={'vocabulary': ['Supabase'], 'language': 'en', 'single_language_mode': False},
+            )
+
+        mock_bytes_dg.assert_called_once()
+        audio_arg, kwargs = mock_bytes_dg.call_args
+        assert audio_arg[0] == b'fake-wav-bytes'
+        assert kwargs['language'] == 'multi'
+        assert kwargs['model'] == 'nova-3'
+        assert 'Omi' in kwargs['keywords']
+        assert 'Supabase' in kwargs['keywords']
+        mock_url_dg.assert_not_called()
+        mock_signed_url.assert_not_called()
+
     @patch('routers.sync.process_conversation')
     @patch('routers.sync.get_closest_conversation_to_timestamps', return_value=None)
     @patch('routers.sync.get_timestamp_from_path', return_value=1700000000)
@@ -695,9 +735,9 @@ class TestBuildPersonEmbeddingsCache:
 
         mock_users_db.get_user_speaker_embedding.return_value = None
         mock_users_db.get_people.return_value = [
-            {'id': 'p1', 'name': 'Alice', 'speaker_embedding': [0.2] * 512},
+            {'id': 'p1', 'name': 'Alice', 'speaker_embedding': [0.2] * 512, 'speech_samples': ['sample-1']},
             {'id': 'p2', 'name': 'Bob'},  # no embedding
-            {'id': 'p3', 'name': 'Carol', 'speaker_embedding': [0.3] * 512},
+            {'id': 'p3', 'name': 'Carol', 'speaker_embedding': [0.3] * 512},  # stale embedding, no samples
         ]
 
         cache = build_person_embeddings_cache('uid1')
@@ -705,7 +745,7 @@ class TestBuildPersonEmbeddingsCache:
         assert 'user' not in cache
         assert 'p1' in cache
         assert 'p2' not in cache
-        assert 'p3' in cache
+        assert 'p3' not in cache
         assert cache['p1']['name'] == 'Alice'
 
     @patch('routers.sync.users_db')
@@ -1213,24 +1253,24 @@ class TestSyncEndpointSpeakerIdWiring:
 class TestDownloadAudioBytes:
     """Verify _download_audio_bytes handles success and failure."""
 
-    @patch('routers.sync.requests')
-    def test_download_success(self, mock_requests):
+    @patch('routers.sync.httpx.get')
+    def test_download_success(self, mock_get):
         from routers.sync import _download_audio_bytes
 
         mock_resp = MagicMock()
         mock_resp.content = b'wav-bytes'
         mock_resp.raise_for_status.return_value = None
-        mock_requests.get.return_value = mock_resp
+        mock_get.return_value = mock_resp
 
         result = _download_audio_bytes('http://example.com/audio.wav')
         assert result == b'wav-bytes'
-        mock_requests.get.assert_called_once_with('http://example.com/audio.wav', timeout=60)
+        mock_get.assert_called_once_with('http://example.com/audio.wav', timeout=60.0)
 
-    @patch('routers.sync.requests')
-    def test_download_failure_returns_none(self, mock_requests):
+    @patch('routers.sync.httpx.get')
+    def test_download_failure_returns_none(self, mock_get):
         from routers.sync import _download_audio_bytes
 
-        mock_requests.get.side_effect = Exception("Connection refused")
+        mock_get.side_effect = Exception("Connection refused")
 
         result = _download_audio_bytes('http://example.com/audio.wav')
         assert result is None

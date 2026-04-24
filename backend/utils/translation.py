@@ -119,8 +119,9 @@ _non_lexical_utterances_pattern = re.compile(
     r'\b(' + '|'.join(re.escape(word) for word in _non_lexical_utterances) + r')\b', re.IGNORECASE
 )
 
-# Initialize the translation client globally
-_client = translate_v3.TranslationServiceClient()
+# Initialize the translation client lazily so missing ADC does not crash API startup.
+_client: Optional[translate_v3.TranslationServiceClient] = None
+_client_init_error: Optional[Exception] = None
 _parent = f"projects/{PROJECT_ID}/locations/global"
 _mime_type = "text/plain"
 
@@ -189,6 +190,21 @@ TRANSLATION_CACHE_TTL = int(os.environ.get("TRANSLATION_CACHE_TTL", 60 * 60 * 24
 
 # Max sentences per batch API call (API supports up to 1024, use conservative limit)
 MAX_BATCH_SIZE = 100
+
+
+def _get_translation_client() -> Optional[translate_v3.TranslationServiceClient]:
+    global _client, _client_init_error
+    if _client is not None:
+        return _client
+    if _client_init_error is not None:
+        return None
+    try:
+        _client = translate_v3.TranslationServiceClient()
+    except Exception as exc:
+        _client_init_error = exc
+        logger.warning(f"Google Translate client unavailable; translations will fall back to source text: {exc}")
+        return None
+    return _client
 
 
 def _detect_with_langdetect(text: str, hint_language: str = None) -> str | None:
@@ -484,6 +500,12 @@ class TranslationService:
                 f"translate_batch api_call sentences={len(uncached_sentences)} "
                 f"cached={len(sentences) - len(uncached_sentences)}/{len(sentences)}"
             )
+            client = _get_translation_client()
+            if client is None:
+                for idx in uncached_indices:
+                    results[idx] = sentences[idx]
+                translated_text = ' '.join(r for r in results if r is not None)
+                return (translated_text, "")
 
             # Batch in chunks of MAX_BATCH_SIZE
             for chunk_start in range(0, len(uncached_sentences), MAX_BATCH_SIZE):
@@ -492,7 +514,7 @@ class TranslationService:
                 chunk_indices = uncached_indices[chunk_start:chunk_end]
 
                 try:
-                    response = _client.translate_text(
+                    response = client.translate_text(
                         contents=chunk,
                         parent=_parent,
                         mime_type=_mime_type,
@@ -579,6 +601,13 @@ class TranslationService:
         # Phase 2: Batch translate uncached texts
         if uncached_hashes:
             uncached_texts = [hash_to_info[h]['text'] for h in uncached_hashes]
+            client = _get_translation_client()
+            if client is None:
+                for h in uncached_hashes:
+                    info = hash_to_info[h]
+                    for idx in info['indices']:
+                        results[idx] = (units[idx][0], info['text'], '')
+                return results
 
             for chunk_start in range(0, len(uncached_texts), MAX_BATCH_SIZE):
                 chunk_end = min(chunk_start + MAX_BATCH_SIZE, len(uncached_texts))
@@ -586,7 +615,7 @@ class TranslationService:
                 chunk_hashes = uncached_hashes[chunk_start:chunk_end]
 
                 try:
-                    response = _client.translate_text(
+                    response = client.translate_text(
                         contents=chunk,
                         parent=_parent,
                         mime_type=_mime_type,
@@ -642,8 +671,12 @@ class TranslationService:
             self._set_memory_cache(text_hash, dest_language, result[0], result[1])
             return result
 
+        client = _get_translation_client()
+        if client is None:
+            return (text, "")
+
         try:
-            response = _client.translate_text(
+            response = client.translate_text(
                 contents=[text],
                 parent=_parent,
                 mime_type=_mime_type,

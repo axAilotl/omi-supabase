@@ -8,8 +8,9 @@ load_dotenv()  # No-op if .env doesn't exist (production); loads local dev secre
 
 logging.basicConfig(level=logging.INFO)
 
-import firebase_admin
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from providers.startup import initialize_backend_services
 
 from routers import (
     chat,
@@ -66,14 +67,33 @@ log_langsmith_status()
 # Validate Stripe price IDs so misconfigured plans fail loud
 validate_stripe_price_ids()
 
-if os.environ.get('SERVICE_ACCOUNT_JSON'):
-    service_account_info = json.loads(os.environ["SERVICE_ACCOUNT_JSON"])
-    credentials = firebase_admin.credentials.Certificate(service_account_info)
-    firebase_admin.initialize_app(credentials)
-else:
-    firebase_admin.initialize_app()
+initialize_backend_services()
+
+
+def _get_allowed_origins() -> list[str]:
+    configured_origins = os.getenv("CORS_ALLOWED_ORIGINS", "")
+    origins = {
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://omi-home.local.vega.nyc",
+        "https://omi.local.vega.nyc",
+    }
+    for origin in configured_origins.split(","):
+        cleaned = origin.strip()
+        if cleaned:
+            origins.add(cleaned)
+    return sorted(origins)
+
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_get_allowed_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(transcribe.router)
 app.include_router(conversations.router)

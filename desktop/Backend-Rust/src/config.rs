@@ -12,11 +12,22 @@ pub struct Config {
     pub gemini_api_key: Option<String>,
     /// Firebase project ID (used for Firestore)
     pub firebase_project_id: Option<String>,
-    /// Firebase project ID for auth token validation (defaults to firebase_project_id)
-    /// Set this when OAuth tokens come from a different project than your Firestore
-    pub firebase_auth_project_id: Option<String>,
-    /// Firebase Web API key (for identity toolkit)
-    pub firebase_api_key: Option<String>,
+    /// Supabase base URL (e.g. http://127.0.0.1:54321)
+    pub supabase_url: Option<String>,
+    /// Supabase auth URL (defaults to {supabase_url}/auth/v1)
+    pub supabase_auth_url: Option<String>,
+    /// Supabase JWKS URL for asymmetric JWT verification
+    pub supabase_jwks_url: Option<String>,
+    /// Supabase anon key used for token exchange
+    pub supabase_anon_key: Option<String>,
+    /// Supabase service-role key used for admin operations
+    pub supabase_service_role_key: Option<String>,
+    /// Supabase JWT signing secret used for HS-based access tokens
+    pub supabase_jwt_secret: Option<String>,
+    /// Supabase JWT audience (defaults to `authenticated`)
+    pub supabase_jwt_audience: Option<String>,
+    /// Supabase JWT issuer (defaults to the auth URL)
+    pub supabase_jwt_issuer: Option<String>,
     /// Base API URL (for OAuth callbacks)
     pub base_api_url: Option<String>,
     /// Apple Sign-In Client ID (Services ID)
@@ -89,8 +100,22 @@ impl Config {
             gemini_api_key: env::var("GEMINI_API_KEY").ok(),
             firebase_project_id: env::var("FIREBASE_PROJECT_ID").ok()
                 .or_else(|| env::var("GCP_PROJECT_ID").ok()),
-            firebase_auth_project_id: env::var("FIREBASE_AUTH_PROJECT_ID").ok(),
-            firebase_api_key: env::var("FIREBASE_API_KEY").ok(),
+            supabase_url: env::var("SUPABASE_URL").ok(),
+            supabase_auth_url: env::var("SUPABASE_AUTH_URL").ok(),
+            supabase_jwks_url: env::var("SUPABASE_JWKS_URL")
+                .ok()
+                .or_else(|| env::var("GOTRUE_JWKS_URL").ok()),
+            supabase_anon_key: env::var("SUPABASE_ANON_KEY")
+                .ok()
+                .or_else(|| env::var("NEXT_PUBLIC_SUPABASE_ANON_KEY").ok()),
+            supabase_service_role_key: env::var("SUPABASE_SERVICE_ROLE_KEY")
+                .ok()
+                .or_else(|| env::var("SERVICE_ROLE_KEY").ok()),
+            supabase_jwt_secret: env::var("SUPABASE_JWT_SECRET").ok(),
+            supabase_jwt_audience: env::var("SUPABASE_JWT_AUDIENCE").ok(),
+            supabase_jwt_issuer: env::var("SUPABASE_JWT_ISSUER")
+                .ok()
+                .or_else(|| env::var("GOTRUE_JWT_ISSUER").ok()),
             base_api_url: env::var("BASE_API_URL").ok(),
             apple_client_id: env::var("APPLE_CLIENT_ID").ok(),
             apple_team_id: env::var("APPLE_TEAM_ID").ok(),
@@ -146,7 +171,12 @@ impl Config {
             tracing::warn!("REDIS_DB_HOST not set - conversation visibility/sharing will not work");
         }
         if self.encryption_secret.is_none() {
-            tracing::warn!("ENCRYPTION_SECRET not set — encrypted user data will not be decryptable");
+            tracing::warn!(
+                "ENCRYPTION_SECRET not set — encrypted user data will not be decryptable"
+            );
+        }
+        if self.supabase_url.is_none() && self.supabase_auth_url.is_none() {
+            tracing::warn!("SUPABASE_URL / SUPABASE_AUTH_URL not set - auth flows will fail");
         }
         Ok(())
     }
@@ -157,7 +187,10 @@ impl Config {
             if let Some(password) = &self.redis_password {
                 // URL-encode the password to handle special characters
                 let encoded_password = urlencoding::encode(password);
-                format!("redis://default:{}@{}:{}", encoded_password, host, self.redis_port)
+                format!(
+                    "redis://default:{}@{}:{}",
+                    encoded_password, host, self.redis_port
+                )
             } else {
                 format!("redis://{}:{}", host, self.redis_port)
             }

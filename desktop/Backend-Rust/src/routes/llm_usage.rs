@@ -1,10 +1,15 @@
 // LLM Usage routes - record per-query token usage in Firestore
 
-use axum::{extract::State, http::StatusCode, routing::{get, post}, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+    Json, Router,
+};
 
 use crate::auth::AuthUser;
-use crate::models::{RecordLlmUsageRequest, RecordLlmUsageResponse};
 use crate::models::llm_usage::GetTotalLlmCostResponse;
+use crate::models::{RecordLlmUsageRequest, RecordLlmUsageResponse};
 use crate::AppState;
 
 async fn record_llm_usage(
@@ -43,7 +48,9 @@ async fn get_total_llm_cost(
     match state.firestore.get_total_llm_cost(&user.uid).await {
         Ok(total) => {
             tracing::info!("LLM total cost for {}: ${:.4}", user.uid, total);
-            Ok(Json(GetTotalLlmCostResponse { total_cost_usd: total }))
+            Ok(Json(GetTotalLlmCostResponse {
+                total_cost_usd: total,
+            }))
         }
         Err(e) => {
             tracing::error!("LLM total cost fetch failed for {}: {}", user.uid, e);

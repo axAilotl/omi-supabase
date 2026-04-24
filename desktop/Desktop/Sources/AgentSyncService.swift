@@ -146,9 +146,9 @@ actor AgentSyncService {
         guard await AuthState.shared.isSignedIn else { return }
         let tickStart = ContinuousClock.now
 
-        // Periodically refresh Firebase token on the VM (every 30 min)
+        // Periodically refresh the access token on the VM (every 30 min)
         if Date().timeIntervalSince(lastTokenRefresh) >= tokenRefreshInterval {
-            await refreshFirebaseToken()
+            await refreshAccessToken()
         }
 
         var totalSynced = 0
@@ -223,9 +223,9 @@ actor AgentSyncService {
         }
     }
 
-    // MARK: - Firebase token refresh
+    // MARK: - Access token refresh
 
-    private func refreshFirebaseToken() async {
+    private func refreshAccessToken() async {
         guard let vmIP = vmIP, let authToken = authToken else { return }
 
         do {
@@ -238,16 +238,16 @@ actor AgentSyncService {
             request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
             request.timeoutInterval = 15
 
-            let body: [String: String] = ["firebaseToken": idToken]
+            let body: [String: String] = ["accessToken": idToken]
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
             let (_, response) = try await URLSession.shared.data(for: request)
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
                 lastTokenRefresh = Date()
-                log("AgentSync: Firebase token refreshed on VM")
+                log("AgentSync: Access token refreshed on VM")
             }
         } catch {
-            log("AgentSync: Firebase token refresh failed — \(error.localizedDescription)")
+            log("AgentSync: Access token refresh failed — \(error.localizedDescription)")
         }
     }
 

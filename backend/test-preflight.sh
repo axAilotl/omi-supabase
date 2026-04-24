@@ -15,6 +15,8 @@ pass=0
 warn=0
 fail=0
 
+BACKEND_MODE="supabase"
+
 ok()   { echo -e "  ${GREEN}✓${NC} $1"; pass=$((pass + 1)); }
 skip() { echo -e "  ${YELLOW}⚠${NC} $1"; warn=$((warn + 1)); }
 bad()  { echo -e "  ${RED}✗${NC} $1"; fail=$((fail + 1)); }
@@ -45,7 +47,9 @@ echo ""
 echo "Python packages:"
 
 missing_pkgs=()
-for pkg in pydantic fastapi firebase_admin google.cloud.firestore redis deepgram_sdk openpipe; do
+python_pkgs=(pydantic fastapi redis deepgram_sdk openpipe sqlalchemy jwt httpx)
+
+for pkg in "${python_pkgs[@]}"; do
   if python3 -c "import $pkg" &>/dev/null 2>&1; then
     ok "$pkg"
   else
@@ -72,6 +76,7 @@ fi
 # ── Environment variables (integration tests / optional) ──
 echo ""
 echo "Env vars (integration — optional):"
+ok "OMI_BACKEND_MODE=$BACKEND_MODE"
 
 check_env() {
   local var=$1
@@ -88,7 +93,9 @@ check_env DEEPGRAM_API_KEY "STT streaming and pre-recorded transcription"
 check_env ADMIN_KEY "admin endpoint tests"
 check_env REDIS_DB_HOST "Redis connection (default: localhost)"
 check_env REDIS_DB_PASSWORD "Redis auth"
-check_env GOOGLE_APPLICATION_CREDENTIALS "Firebase/Firestore integration tests"
+check_env SUPABASE_URL "Supabase auth/api base URL"
+check_env SUPABASE_ANON_KEY "Supabase OAuth and refresh flows"
+check_env SUPABASE_SERVICE_ROLE_KEY "Supabase admin/storage operations"
 
 # ── Redis connectivity ──
 echo ""

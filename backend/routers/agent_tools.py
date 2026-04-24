@@ -4,7 +4,7 @@ Agent tools router — exposes Python backend tools to the VM agent.
 Endpoints:
 - GET  /v1/agent/tools         — returns tool definitions (name, description, parameters)
 - POST /v1/agent/execute-tool  — executes a named tool and returns the result
-- GET  /v1/agent/vm-status     — returns basic VM status from Firestore
+- GET  /v1/agent/vm-status     — returns basic VM status from the active backend store
 - POST /v1/agent/vm-ensure     — checks VM status, restarts if stopped, returns current state
 - POST /v1/agent/keepalive     — pings the VM to reset its idle auto-stop timer
 """
@@ -19,7 +19,7 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
-from database.users import get_agent_vm
+import database.users as users_db
 from utils.other.endpoints import get_current_user_uid, with_rate_limit
 from utils.retrieval.agentic import agent_config_context, CORE_TOOLS
 from utils.retrieval.tools.app_tools import load_app_tools
@@ -118,25 +118,20 @@ async def _start_vm_and_wait(vm_name: str, zone: str) -> str:
         return ip
 
 
-def _update_firestore_vm(uid: str, ip: str | None, status: str):
-    """Update the user's agentVm fields in Firestore."""
-    from database.users import db as firestore_db
-
-    update = {"agentVm.status": status}
-    if ip:
-        update["agentVm.ip"] = ip
-    firestore_db.collection('users').document(uid).update(update)
+def _update_agent_vm(uid: str, ip: str | None, status: str):
+    """Update the user's agentVm fields in the active backend store."""
+    users_db.update_agent_vm(uid, ip, status)
 
 
 async def _restart_vm_background(uid: str, vm_name: str, zone: str):
-    """Background task: start stopped VM, update Firestore with new IP when ready."""
+    """Background task: start stopped VM, update backend state with new IP when ready."""
     try:
         ip = await _start_vm_and_wait(vm_name, zone)
-        _update_firestore_vm(uid, ip, "ready")
+        _update_agent_vm(uid, ip, "ready")
         logger.info(f"[vm-ensure] VM {vm_name} restarted, ip={ip}")
     except Exception as e:
         logger.error(f"[vm-ensure] Failed to restart VM {vm_name}: {e}")
-        _update_firestore_vm(uid, None, "error")
+        _update_agent_vm(uid, None, "error")
 
 
 # --------------- endpoints ---------------
@@ -144,8 +139,8 @@ async def _restart_vm_background(uid: str, vm_name: str, zone: str):
 
 @router.get("/v1/agent/vm-status")
 def get_vm_status(uid: str = Depends(get_current_user_uid)):
-    """Return the user's agent VM info from Firestore."""
-    vm = get_agent_vm(uid)
+    """Return the user's agent VM info from the active backend store."""
+    vm = users_db.get_agent_vm(uid)
     logger.info(f"[vm-status] uid={uid} vm={sanitize(vm)}")
     if not vm or vm.get("status") != "ready":
         return {"has_vm": False}
@@ -158,7 +153,7 @@ def get_vm_status(uid: str = Depends(get_current_user_uid)):
 @router.post("/v1/agent/vm-ensure")
 async def ensure_vm(background_tasks: BackgroundTasks, uid: str = Depends(get_current_user_uid)):
     """Check VM status; if stopped/terminated, restart it in the background."""
-    vm = get_agent_vm(uid)
+    vm = users_db.get_agent_vm(uid)
     if not vm:
         return {"has_vm": False}
 
@@ -166,7 +161,7 @@ async def ensure_vm(background_tasks: BackgroundTasks, uid: str = Depends(get_cu
     zone = vm.get("zone", "us-central1-a")
     fs_status = vm.get("status", "")
 
-    # If Firestore already says provisioning, don't double-start
+    # If the active backend already says provisioning, don't double-start
     if fs_status == "provisioning":
         return {"has_vm": True, "status": "provisioning"}
 
@@ -180,12 +175,12 @@ async def ensure_vm(background_tasks: BackgroundTasks, uid: str = Depends(get_cu
 
         if gce_status in ("TERMINATED", "STOPPED"):
             logger.info(f"[vm-ensure] VM {vm_name} is {gce_status}, restarting...")
-            _update_firestore_vm(uid, None, "provisioning")
+            _update_agent_vm(uid, None, "provisioning")
             background_tasks.add_task(_restart_vm_background, uid, vm_name, zone)
             return {"has_vm": True, "status": "provisioning"}
 
         if gce_status == "RUNNING" and fs_status != "ready":
-            _update_firestore_vm(uid, vm.get("ip"), "ready")
+            _update_agent_vm(uid, vm.get("ip"), "ready")
             return {"has_vm": True, "status": "ready"}
 
     return {"has_vm": True, "status": fs_status}
@@ -194,7 +189,7 @@ async def ensure_vm(background_tasks: BackgroundTasks, uid: str = Depends(get_cu
 @router.post("/v1/agent/keepalive")
 async def keepalive(uid: str = Depends(get_current_user_uid)):
     """Ping the VM's /ping endpoint to reset its idle auto-stop timer."""
-    vm = get_agent_vm(uid)
+    vm = users_db.get_agent_vm(uid)
     if not vm or vm.get("status") != "ready":
         return {"ok": False, "reason": "no_vm"}
 

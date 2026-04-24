@@ -19,6 +19,8 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
   // Services
   final AudioPlayerUtils _audioPlayerUtils = AudioPlayerUtils.instance;
 
+  bool _isPendingWal(Wal wal) => wal.status == WalStatus.miss || wal.status == WalStatus.corrupted;
+
   // WAL management
   List<Wal> _allWals = [];
   List<Wal> get allWals => _allWals;
@@ -38,8 +40,7 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
     notifyListeners();
   }
 
-  List<Wal> get pendingWals =>
-      _allWals.where((w) => w.status == WalStatus.miss || w.status == WalStatus.corrupted || w.isSyncing).toList();
+  List<Wal> get pendingWals => _allWals.where((w) => _isPendingWal(w) || w.isSyncing).toList();
 
   List<Wal> get syncedWals => _allWals.where((w) => w.status == WalStatus.synced).toList();
 
@@ -94,7 +95,7 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
   int _walsProcessedCount = 0;
 
   // Computed properties for backward compatibility
-  List<Wal> get missingWals => _allWals.where((w) => w.status == WalStatus.miss).toList();
+  List<Wal> get missingWals => _allWals.where(_isPendingWal).toList();
   int get missingWalsInSeconds =>
       missingWals.isEmpty ? 0 : missingWals.map((val) => val.seconds).reduce((a, b) => a + b);
 
@@ -156,7 +157,7 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
     if (_syncState.isProcessing) return;
     if (_walService.getSyncs().isStorageSyncing || _walService.getSyncs().isSdCardSyncing) return;
     final phoneWals = _allWals
-        .where((w) => w.status == WalStatus.miss && (w.storage == WalStorage.disk || w.storage == WalStorage.mem))
+        .where((w) => _isPendingWal(w) && (w.storage == WalStorage.disk || w.storage == WalStorage.mem))
         .toList();
     if (phoneWals.isEmpty) return;
     Logger.debug('SyncProvider: Auto-uploading ${phoneWals.length} pending phone files to cloud');
@@ -415,7 +416,7 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
     if (_syncState.isSyncing) {
       _walsProcessedCount++;
       // If device download created new WALs, total grows dynamically
-      final currentMissing = _allWals.where((w) => w.status == WalStatus.miss).length;
+      final currentMissing = _allWals.where(_isPendingWal).length;
       final newTotal = _walsProcessedCount + currentMissing;
       if (newTotal > _totalWalsToProcess) {
         _totalWalsToProcess = newTotal;

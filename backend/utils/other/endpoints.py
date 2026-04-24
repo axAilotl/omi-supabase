@@ -5,47 +5,53 @@ import time
 from fastapi import Depends, Header, HTTPException, WebSocketException
 from fastapi import Request
 from starlette.websockets import WebSocket
-from firebase_admin import auth
-from firebase_admin.auth import InvalidIdTokenError
 import logging
 import redis as redis_pkg
 
 from database.redis_db import check_rate_limit, try_acquire_listen_lock
 from database.users import record_user_platform
+from providers.auth import AuthProviderError, get_auth_provider
 from utils.byok import extract_byok_from_websocket, set_byok_keys, validate_byok_request, validate_byok_websocket
 from utils.rate_limit_config import RATE_POLICIES, RATE_LIMIT_SHADOW, get_effective_limit
 
 logger = logging.getLogger(__name__)
+InvalidIdTokenError = AuthProviderError
+
+
+def _get_claim_uid(claims: dict) -> str:
+    uid = claims.get("uid") or claims.get("sub")
+    if not uid:
+        raise AuthProviderError("Authenticated token is missing both uid and sub claims")
+    return str(uid)
 
 
 def get_user(uid: str):
-    user = auth.get_user(uid)
-    return user
+    return get_auth_provider().get_user(uid)
 
 
 def verify_token(token: str) -> str:
     """
-    Verify a Firebase token or ADMIN_KEY and return the uid.
+    Verify an access token or ADMIN_KEY and return the uid.
 
     Args:
-        token: The token to verify (Firebase ID token or ADMIN_KEY format)
+        token: The token to verify (backend provider token or ADMIN_KEY format)
 
     Returns:
         The user's uid
 
     Raises:
-        InvalidIdTokenError: If the token is invalid
+        AuthProviderError: If the token is invalid
     """
     # Check for ADMIN_KEY format
     admin_key = os.getenv('ADMIN_KEY')
     if admin_key and token.startswith(admin_key):
         return token[len(admin_key) :]
 
-    # Verify Firebase token
+    # Verify backend provider token
     try:
-        decoded_token = auth.verify_id_token(token)
-        return decoded_token['uid']
-    except InvalidIdTokenError:
+        decoded_token = get_auth_provider().verify_access_token(token)
+        return _get_claim_uid(decoded_token)
+    except AuthProviderError:
         if os.getenv('LOCAL_DEVELOPMENT') == 'true':
             return '123'
         raise
@@ -72,7 +78,7 @@ def get_current_user_uid(
     try:
         token = authorization.split(' ')[1]
         uid = verify_token(token)
-    except InvalidIdTokenError as e:
+    except AuthProviderError as e:
         logger.error(e)
         raise HTTPException(status_code=401, detail="Invalid authorization token")
 
@@ -108,7 +114,7 @@ def get_current_user_uid_no_byok_validation(
     try:
         token = authorization.split(' ')[1]
         uid = verify_token(token)
-    except InvalidIdTokenError as e:
+    except AuthProviderError as e:
         logger.error(e)
         raise HTTPException(status_code=401, detail="Invalid authorization token")
 
@@ -134,7 +140,7 @@ def _verify_ws_auth(authorization: str) -> str:
     try:
         token = authorization.split(' ')[1]
         return verify_token(token)
-    except InvalidIdTokenError as e:
+    except AuthProviderError as e:
         logger.error(f"WebSocket auth failed: {e}")
         raise WebSocketException(code=1008, reason="Invalid or expired token")
     except Exception as e:
@@ -338,5 +344,5 @@ def timeit(func):
 
 
 def delete_account(uid: str):
-    auth.delete_user(uid)
+    get_auth_provider().delete_user(uid)
     return {"message": "User deleted"}

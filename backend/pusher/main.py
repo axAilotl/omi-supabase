@@ -1,21 +1,15 @@
-import json
 import logging
 import os
 
 logging.basicConfig(level=logging.INFO)
 
-import firebase_admin
 from fastapi import FastAPI
 
+from providers.startup import initialize_backend_services
 from routers import pusher, metrics
 from utils.http_client import close_all_clients
 
-if os.environ.get('SERVICE_ACCOUNT_JSON'):
-    service_account_info = json.loads(os.environ["SERVICE_ACCOUNT_JSON"])
-    credentials = firebase_admin.credentials.Certificate(service_account_info)
-    firebase_admin.initialize_app(credentials)
-else:
-    firebase_admin.initialize_app()
+initialize_backend_services()
 
 app = FastAPI()
 app.include_router(pusher.router)

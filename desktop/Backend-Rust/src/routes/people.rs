@@ -53,7 +53,11 @@ async fn create_person(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    match state.firestore.create_person(&user.uid, &request.name).await {
+    match state
+        .firestore
+        .create_person(&user.uid, &request.name)
+        .await
+    {
         Ok(person) => Ok(Json(person)),
         Err(e) => {
             tracing::error!("Failed to create person: {}", e);

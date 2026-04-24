@@ -12,6 +12,7 @@ use chrono::Utc;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -134,20 +135,11 @@ pub struct TokenRequest {
     code: String,
     /// OAuth redirect_uri - validated against the original authorization request
     redirect_uri: String,
-    #[serde(default)]
-    use_custom_token: bool,
 }
 
-#[derive(Debug, Serialize)]
-pub struct TokenResponse {
-    provider: String,
-    id_token: String,
-    access_token: Option<String>,
-    provider_id: String,
-    token_type: String,
-    expires_in: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    custom_token: Option<String>,
+#[derive(Debug, Deserialize)]
+pub struct RefreshRequest {
+    refresh_token: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -208,7 +200,10 @@ async fn auth_authorize(
         redirect_uri: params.redirect_uri,
         state: params.state,
     };
-    state.sessions.set_session(&session_id, session_data, 300).await;
+    state
+        .sessions
+        .set_session(&session_id, session_data, 300)
+        .await;
 
     match params.provider.as_str() {
         "apple" => apple_auth_redirect(&state.config, &session_id),
@@ -221,12 +216,18 @@ async fn auth_authorize(
 }
 
 fn apple_auth_redirect(config: &Config, session_id: &str) -> Result<Redirect, ErrorResponse> {
-    let client_id = config.apple_client_id.as_ref().ok_or_else(|| ErrorResponse {
-        error: "not_configured".to_string(),
-        message: "APPLE_CLIENT_ID not configured".to_string(),
-    })?;
+    let client_id = config
+        .apple_client_id
+        .as_ref()
+        .ok_or_else(|| ErrorResponse {
+            error: "not_configured".to_string(),
+            message: "APPLE_CLIENT_ID not configured".to_string(),
+        })?;
 
-    let api_base_url = config.base_api_url.as_deref().unwrap_or("http://localhost:8080");
+    let api_base_url = config
+        .base_api_url
+        .as_deref()
+        .unwrap_or("http://localhost:8080");
     let callback_url = format!("{}/v1/auth/callback/apple", api_base_url);
 
     let auth_url = format!(
@@ -244,12 +245,18 @@ fn apple_auth_redirect(config: &Config, session_id: &str) -> Result<Redirect, Er
 }
 
 fn google_auth_redirect(config: &Config, session_id: &str) -> Result<Redirect, ErrorResponse> {
-    let client_id = config.google_client_id.as_ref().ok_or_else(|| ErrorResponse {
-        error: "not_configured".to_string(),
-        message: "GOOGLE_CLIENT_ID not configured".to_string(),
-    })?;
+    let client_id = config
+        .google_client_id
+        .as_ref()
+        .ok_or_else(|| ErrorResponse {
+            error: "not_configured".to_string(),
+            message: "GOOGLE_CLIENT_ID not configured".to_string(),
+        })?;
 
-    let api_base_url = config.base_api_url.as_deref().unwrap_or("http://localhost:8080");
+    let api_base_url = config
+        .base_api_url
+        .as_deref()
+        .unwrap_or("http://localhost:8080");
     let callback_url_raw = format!("{}/v1/auth/callback/google", api_base_url);
     let callback_url = urlencoding::encode(&callback_url_raw);
     let scope = urlencoding::encode("openid email profile");
@@ -279,17 +286,24 @@ async fn auth_callback_apple(
         });
     }
 
-    let session_data = state.sessions.get_session(&form.state).await.ok_or_else(|| ErrorResponse {
-        error: "invalid_session".to_string(),
-        message: "Invalid or expired auth session".to_string(),
-    })?;
+    let session_data = state
+        .sessions
+        .get_session(&form.state)
+        .await
+        .ok_or_else(|| ErrorResponse {
+            error: "invalid_session".to_string(),
+            message: "Invalid or expired auth session".to_string(),
+        })?;
 
     // Exchange Apple code for tokens
     let oauth_credentials = exchange_apple_code(&state, &form.code, &session_data).await?;
 
     // Create temporary auth code
     let auth_code = uuid::Uuid::new_v4().to_string();
-    state.sessions.set_code(&auth_code, oauth_credentials, 300).await;
+    state
+        .sessions
+        .set_code(&auth_code, oauth_credentials, 300)
+        .await;
 
     // Return HTML that redirects to app
     let html = render_auth_callback(
@@ -324,17 +338,24 @@ async fn auth_callback_google(
         message: "Missing state parameter".to_string(),
     })?;
 
-    let session_data = state.sessions.get_session(&session_id).await.ok_or_else(|| ErrorResponse {
-        error: "invalid_session".to_string(),
-        message: "Invalid or expired auth session".to_string(),
-    })?;
+    let session_data = state
+        .sessions
+        .get_session(&session_id)
+        .await
+        .ok_or_else(|| ErrorResponse {
+            error: "invalid_session".to_string(),
+            message: "Invalid or expired auth session".to_string(),
+        })?;
 
     // Exchange Google code for tokens
     let oauth_credentials = exchange_google_code(&state, &code, &session_data).await?;
 
     // Create temporary auth code
     let auth_code = uuid::Uuid::new_v4().to_string();
-    state.sessions.set_code(&auth_code, oauth_credentials, 300).await;
+    state
+        .sessions
+        .set_code(&auth_code, oauth_credentials, 300)
+        .await;
 
     // Return HTML that redirects to app
     let html = render_auth_callback(
@@ -351,7 +372,7 @@ async fn auth_callback_google(
 async fn auth_token(
     State(state): State<AuthState>,
     Form(form): Form<TokenRequest>,
-) -> Result<Json<TokenResponse>, ErrorResponse> {
+) -> Result<Json<Value>, ErrorResponse> {
     if form.grant_type != "authorization_code" {
         return Err(ErrorResponse {
             error: "unsupported_grant".to_string(),
@@ -359,15 +380,20 @@ async fn auth_token(
         });
     }
 
-    let oauth_credentials_json = state.sessions.get_code(&form.code).await.ok_or_else(|| ErrorResponse {
-        error: "invalid_code".to_string(),
-        message: "Invalid or expired code".to_string(),
-    })?;
+    let oauth_credentials_json =
+        state
+            .sessions
+            .get_code(&form.code)
+            .await
+            .ok_or_else(|| ErrorResponse {
+                error: "invalid_code".to_string(),
+                message: "Invalid or expired code".to_string(),
+            })?;
 
     state.sessions.delete_code(&form.code).await;
 
-    let credentials: OAuthCredentials = serde_json::from_str(&oauth_credentials_json)
-        .map_err(|e| ErrorResponse {
+    let credentials: OAuthCredentials =
+        serde_json::from_str(&oauth_credentials_json).map_err(|e| ErrorResponse {
             error: "parse_error".to_string(),
             message: format!("Failed to parse credentials: {}", e),
         })?;
@@ -380,25 +406,55 @@ async fn auth_token(
         });
     }
 
-    let provider_id = credentials.provider_id.clone();
-    let mut response = TokenResponse {
-        provider: credentials.provider.clone(),
-        id_token: credentials.id_token.clone(),
-        access_token: credentials.access_token.clone(),
-        provider_id,
-        token_type: "Bearer".to_string(),
-        expires_in: 3600,
-        custom_token: None,
-    };
-
-    if form.use_custom_token {
-        match generate_custom_token(&state, &credentials).await {
-            Ok(token) => response.custom_token = Some(token),
-            Err(e) => tracing::warn!("Failed to generate custom token: {}", e),
-        }
+    let mut response = exchange_supabase_session(&state, &credentials).await?;
+    if let Some(object) = response.as_object_mut() {
+        object.insert("provider".to_string(), json!(credentials.provider));
+        object.insert("provider_id".to_string(), json!(credentials.provider_id));
+        object.insert("id_token".to_string(), json!(credentials.id_token));
+        object.insert(
+            "provider_access_token".to_string(),
+            json!(credentials.access_token),
+        );
     }
 
     Ok(Json(response))
+}
+
+async fn auth_refresh(
+    State(state): State<AuthState>,
+    Form(form): Form<RefreshRequest>,
+) -> Result<Json<Value>, ErrorResponse> {
+    let auth_url = resolve_supabase_auth_url(&state.config)?;
+    let anon_key = resolve_supabase_anon_key(&state.config)?;
+
+    let response = state
+        .http_client
+        .post(format!("{}/token?grant_type=refresh_token", auth_url))
+        .header("apikey", &anon_key)
+        .header("Authorization", format!("Bearer {}", anon_key))
+        .form(&[("refresh_token", form.refresh_token.as_str())])
+        .send()
+        .await
+        .map_err(|e| ErrorResponse {
+            error: "request_failed".to_string(),
+            message: format!("Supabase refresh request failed: {}", e),
+        })?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_default();
+        tracing::error!("Supabase token refresh failed: {}", error_text);
+        return Err(ErrorResponse {
+            error: "refresh_failed".to_string(),
+            message: "Failed to refresh Supabase session".to_string(),
+        });
+    }
+
+    let json: Value = response.json().await.map_err(|e| ErrorResponse {
+        error: "parse_error".to_string(),
+        message: format!("Failed to parse Supabase refresh response: {}", e),
+    })?;
+
+    Ok(Json(json))
 }
 
 async fn exchange_apple_code(
@@ -408,10 +464,13 @@ async fn exchange_apple_code(
 ) -> Result<String, ErrorResponse> {
     let config = &state.config;
 
-    let client_id = config.apple_client_id.as_ref().ok_or_else(|| ErrorResponse {
-        error: "not_configured".to_string(),
-        message: "Apple auth not configured".to_string(),
-    })?;
+    let client_id = config
+        .apple_client_id
+        .as_ref()
+        .ok_or_else(|| ErrorResponse {
+            error: "not_configured".to_string(),
+            message: "Apple auth not configured".to_string(),
+        })?;
 
     let team_id = config.apple_team_id.as_ref().ok_or_else(|| ErrorResponse {
         error: "not_configured".to_string(),
@@ -423,12 +482,18 @@ async fn exchange_apple_code(
         message: "APPLE_KEY_ID not configured".to_string(),
     })?;
 
-    let private_key = config.apple_private_key.as_ref().ok_or_else(|| ErrorResponse {
-        error: "not_configured".to_string(),
-        message: "APPLE_PRIVATE_KEY not configured".to_string(),
-    })?;
+    let private_key = config
+        .apple_private_key
+        .as_ref()
+        .ok_or_else(|| ErrorResponse {
+            error: "not_configured".to_string(),
+            message: "APPLE_PRIVATE_KEY not configured".to_string(),
+        })?;
 
-    let api_base_url = config.base_api_url.as_deref().unwrap_or("http://localhost:8080");
+    let api_base_url = config
+        .base_api_url
+        .as_deref()
+        .unwrap_or("http://localhost:8080");
     let callback_url = format!("{}/v1/auth/callback/apple", api_base_url);
 
     // Generate client secret JWT
@@ -493,17 +558,26 @@ async fn exchange_google_code(
 ) -> Result<String, ErrorResponse> {
     let config = &state.config;
 
-    let client_id = config.google_client_id.as_ref().ok_or_else(|| ErrorResponse {
-        error: "not_configured".to_string(),
-        message: "Google auth not configured".to_string(),
-    })?;
+    let client_id = config
+        .google_client_id
+        .as_ref()
+        .ok_or_else(|| ErrorResponse {
+            error: "not_configured".to_string(),
+            message: "Google auth not configured".to_string(),
+        })?;
 
-    let client_secret = config.google_client_secret.as_ref().ok_or_else(|| ErrorResponse {
-        error: "not_configured".to_string(),
-        message: "GOOGLE_CLIENT_SECRET not configured".to_string(),
-    })?;
+    let client_secret = config
+        .google_client_secret
+        .as_ref()
+        .ok_or_else(|| ErrorResponse {
+            error: "not_configured".to_string(),
+            message: "GOOGLE_CLIENT_SECRET not configured".to_string(),
+        })?;
 
-    let api_base_url = config.base_api_url.as_deref().unwrap_or("http://localhost:8080");
+    let api_base_url = config
+        .base_api_url
+        .as_deref()
+        .unwrap_or("http://localhost:8080");
     let callback_url = format!("{}/v1/auth/callback/google", api_base_url);
 
     // Exchange code for tokens
@@ -558,6 +632,72 @@ async fn exchange_google_code(
     })
 }
 
+fn resolve_supabase_auth_url(config: &Config) -> Result<String, ErrorResponse> {
+    if let Some(auth_url) = &config.supabase_auth_url {
+        return Ok(auth_url.trim_end_matches('/').to_string());
+    }
+    if let Some(base_url) = &config.supabase_url {
+        return Ok(format!("{}/auth/v1", base_url.trim_end_matches('/')));
+    }
+    Err(ErrorResponse {
+        error: "not_configured".to_string(),
+        message: "SUPABASE_AUTH_URL or SUPABASE_URL not configured".to_string(),
+    })
+}
+
+fn resolve_supabase_anon_key(config: &Config) -> Result<String, ErrorResponse> {
+    config
+        .supabase_anon_key
+        .clone()
+        .ok_or_else(|| ErrorResponse {
+            error: "not_configured".to_string(),
+            message: "SUPABASE_ANON_KEY not configured".to_string(),
+        })
+}
+
+async fn exchange_supabase_session(
+    state: &AuthState,
+    credentials: &OAuthCredentials,
+) -> Result<Value, ErrorResponse> {
+    let auth_url = resolve_supabase_auth_url(&state.config)?;
+    let anon_key = resolve_supabase_anon_key(&state.config)?;
+    let mut request_body = json!({
+        "provider": credentials.provider,
+        "id_token": credentials.id_token,
+    });
+
+    if let Some(access_token) = &credentials.access_token {
+        request_body["access_token"] = json!(access_token);
+    }
+
+    let response = state
+        .http_client
+        .post(format!("{}/token?grant_type=id_token", auth_url))
+        .header("apikey", &anon_key)
+        .header("Authorization", format!("Bearer {}", anon_key))
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| ErrorResponse {
+            error: "request_failed".to_string(),
+            message: format!("Supabase session exchange failed: {}", e),
+        })?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_default();
+        tracing::error!("Supabase session exchange failed: {}", error_text);
+        return Err(ErrorResponse {
+            error: "token_exchange_failed".to_string(),
+            message: "Failed to exchange provider tokens for a Supabase session".to_string(),
+        });
+    }
+
+    response.json().await.map_err(|e| ErrorResponse {
+        error: "parse_error".to_string(),
+        message: format!("Failed to parse Supabase session response: {}", e),
+    })
+}
+
 fn generate_apple_client_secret(
     client_id: &str,
     team_id: &str,
@@ -587,82 +727,12 @@ fn generate_apple_client_secret(
     })
 }
 
-async fn generate_custom_token(
-    state: &AuthState,
-    credentials: &OAuthCredentials,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let firebase_api_key = state.config.firebase_api_key.as_ref()
-        .ok_or("FIREBASE_API_KEY not configured")?;
-
-    // Sign in with OAuth credential using Firebase Auth REST API
-    let sign_in_url = format!(
-        "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={}",
-        firebase_api_key
-    );
-
-    let provider_id = match credentials.provider.as_str() {
-        "google" => "google.com",
-        "apple" => "apple.com",
-        _ => return Err(format!("Unsupported provider: {}", credentials.provider).into()),
-    };
-
-    let mut post_body = format!("id_token={}&providerId={}", credentials.id_token, provider_id);
-    if let Some(access_token) = &credentials.access_token {
-        post_body.push_str(&format!("&access_token={}", access_token));
-    }
-
-    #[derive(Serialize)]
-    struct SignInRequest {
-        #[serde(rename = "postBody")]
-        post_body: String,
-        #[serde(rename = "requestUri")]
-        request_uri: String,
-        #[serde(rename = "returnIdpCredential")]
-        return_idp_credential: bool,
-        #[serde(rename = "returnSecureToken")]
-        return_secure_token: bool,
-    }
-
-    let response = state
-        .http_client
-        .post(&sign_in_url)
-        .json(&SignInRequest {
-            post_body,
-            request_uri: "http://localhost".to_string(),
-            return_idp_credential: true,
-            return_secure_token: true,
-        })
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let error = response.text().await?;
-        tracing::error!("Firebase sign-in failed: {}", error);
-        return Err("Firebase sign-in failed".into());
-    }
-
-    #[derive(Deserialize)]
-    struct SignInResponse {
-        #[serde(rename = "localId")]
-        local_id: String,
-    }
-
-    let result: SignInResponse = response.json().await?;
-    let firebase_uid = result.local_id;
-
-    tracing::info!("Firebase sign-in successful, UID: {}", firebase_uid);
-
-    // For custom token generation, we need Firebase Admin SDK
-    // In Rust, we'd need to use the service account to create a custom token
-    // For now, return an error indicating this needs server-side implementation
-    // The Python version uses firebase_admin.auth.create_custom_token()
-
-    // TODO: Implement custom token generation using service account
-    // This requires signing a JWT with the service account private key
-    Err("Custom token generation requires Firebase Admin SDK - not yet implemented in Rust".into())
-}
-
-fn render_auth_callback(code: &str, state: &str, redirect_uri: &str, error: Option<&str>) -> String {
+fn render_auth_callback(
+    code: &str,
+    state: &str,
+    redirect_uri: &str,
+    error: Option<&str>,
+) -> String {
     // Load template and replace placeholders
     let template = include_str!("../../templates/auth_callback.html");
 
@@ -670,7 +740,10 @@ fn render_auth_callback(code: &str, state: &str, redirect_uri: &str, error: Opti
         .replace("{{ code }}", code)
         .replace("{{ state }}", state)
         .replace("{{ redirect_uri }}", redirect_uri)
-        .replace("{{ error if error is defined else '' }}", error.unwrap_or(""))
+        .replace(
+            "{{ error if error is defined else '' }}",
+            error.unwrap_or(""),
+        )
 }
 
 /// Create auth routes
@@ -682,10 +755,14 @@ pub fn auth_routes(config: Arc<Config>) -> Router {
     };
 
     Router::new()
-        .route("/.well-known/apple-developer-domain-association.txt", get(apple_domain_association))
+        .route(
+            "/.well-known/apple-developer-domain-association.txt",
+            get(apple_domain_association),
+        )
         .route("/v1/auth/authorize", get(auth_authorize))
         .route("/v1/auth/callback/apple", post(auth_callback_apple))
         .route("/v1/auth/callback/google", get(auth_callback_google))
         .route("/v1/auth/token", post(auth_token))
+        .route("/v1/auth/refresh", post(auth_refresh))
         .with_state(auth_state)
 }

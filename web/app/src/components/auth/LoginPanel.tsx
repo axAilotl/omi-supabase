@@ -1,12 +1,12 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { X } from 'lucide-react';
-import { useAuth } from './AuthProvider';
-import { cn } from '@/lib/utils';
-import Image from 'next/image';
-import { useRouter } from 'next/navigation';
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { X } from "lucide-react";
+import { useAuth } from "./AuthProvider";
+import { cn } from "@/lib/utils";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
 
 interface LoginPanelProps {
   isOpen: boolean;
@@ -15,35 +15,43 @@ interface LoginPanelProps {
 
 export function LoginPanel({ isOpen, onClose }: LoginPanelProps) {
   const { signInWithGoogle, signInWithApple } = useAuth();
-  const [isLoading, setIsLoading] = useState<'google' | 'apple' | null>(null);
+  const [isLoading, setIsLoading] = useState<"google" | "apple" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   const handleGoogleSignIn = async () => {
-    setIsLoading('google');
+    setIsLoading("google");
     setError(null);
     try {
       await signInWithGoogle();
       onClose();
-      router.push('/conversations');
+      router.push("/conversations");
     } catch (err) {
-      console.error('Google sign-in failed:', err);
-      setError('Failed to sign in with Google. Please try again.');
+      console.error("Google sign-in failed:", err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to sign in with Google. Please try again.",
+      );
     } finally {
       setIsLoading(null);
     }
   };
 
   const handleAppleSignIn = async () => {
-    setIsLoading('apple');
+    setIsLoading("apple");
     setError(null);
     try {
       await signInWithApple();
       onClose();
-      router.push('/conversations');
+      router.push("/conversations");
     } catch (err) {
-      console.error('Apple sign-in failed:', err);
-      setError('Failed to sign in with Apple. Please try again.');
+      console.error("Apple sign-in failed:", err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to sign in with Apple. Please try again.",
+      );
     } finally {
       setIsLoading(null);
     }
@@ -65,15 +73,15 @@ export function LoginPanel({ isOpen, onClose }: LoginPanelProps) {
 
           {/* Panel - slides in from right */}
           <motion.div
-            initial={{ x: '100%', opacity: 0.8 }}
+            initial={{ x: "100%", opacity: 0.8 }}
             animate={{ x: 0, opacity: 1 }}
-            exit={{ x: '100%', opacity: 0.8 }}
-            transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+            exit={{ x: "100%", opacity: 0.8 }}
+            transition={{ type: "spring", damping: 30, stiffness: 300 }}
             className={cn(
-              'fixed right-0 top-0 h-full z-50',
-              'w-full sm:w-[420px]',
-              'bg-[#0B0F17] border-l border-white/10',
-              'flex flex-col shadow-2xl'
+              "fixed right-0 top-0 h-full z-50",
+              "w-full sm:w-[420px]",
+              "bg-[#0B0F17] border-l border-white/10",
+              "flex flex-col shadow-2xl",
             )}
           >
             {/* Subtle purple glow at top */}
@@ -125,14 +133,14 @@ export function LoginPanel({ isOpen, onClose }: LoginPanelProps) {
                     onClick={handleGoogleSignIn}
                     disabled={isLoading !== null}
                     className={cn(
-                      'w-full flex items-center justify-center gap-3 px-4 py-3.5 rounded-xl',
-                      'bg-white text-gray-900 font-medium',
-                      'hover:bg-gray-100 transition-all',
-                      'disabled:opacity-50 disabled:cursor-not-allowed',
-                      'shadow-lg shadow-white/5'
+                      "w-full flex items-center justify-center gap-3 px-4 py-3.5 rounded-xl",
+                      "bg-white text-gray-900 font-medium",
+                      "hover:bg-gray-100 transition-all",
+                      "disabled:opacity-50 disabled:cursor-not-allowed",
+                      "shadow-lg shadow-white/5",
                     )}
                   >
-                    {isLoading === 'google' ? (
+                    {isLoading === "google" ? (
                       <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
                     ) : (
                       <svg className="w-5 h-5" viewBox="0 0 24 24">
@@ -161,16 +169,20 @@ export function LoginPanel({ isOpen, onClose }: LoginPanelProps) {
                     onClick={handleAppleSignIn}
                     disabled={isLoading !== null}
                     className={cn(
-                      'w-full flex items-center justify-center gap-3 px-4 py-3.5 rounded-xl',
-                      'bg-white/5 text-white font-medium border border-white/10',
-                      'hover:bg-white/10 hover:border-white/20 transition-all',
-                      'disabled:opacity-50 disabled:cursor-not-allowed'
+                      "w-full flex items-center justify-center gap-3 px-4 py-3.5 rounded-xl",
+                      "bg-white/5 text-white font-medium border border-white/10",
+                      "hover:bg-white/10 hover:border-white/20 transition-all",
+                      "disabled:opacity-50 disabled:cursor-not-allowed",
                     )}
                   >
-                    {isLoading === 'apple' ? (
+                    {isLoading === "apple" ? (
                       <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
                     ) : (
-                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                      <svg
+                        className="w-5 h-5"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                      >
                         <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z" />
                       </svg>
                     )}
@@ -192,7 +204,7 @@ export function LoginPanel({ isOpen, onClose }: LoginPanelProps) {
 
                 {/* Terms */}
                 <p className="text-xs text-gray-500 text-center leading-relaxed">
-                  By signing in, you agree to our{' '}
+                  By signing in, you agree to our{" "}
                   <a
                     href="https://www.omi.me/pages/terms"
                     target="_blank"
@@ -200,8 +212,8 @@ export function LoginPanel({ isOpen, onClose }: LoginPanelProps) {
                     className="text-purple-primary hover:text-purple-secondary transition-colors"
                   >
                     Terms of Service
-                  </a>{' '}
-                  and{' '}
+                  </a>{" "}
+                  and{" "}
                   <a
                     href="https://www.omi.me/pages/privacy"
                     target="_blank"

@@ -49,7 +49,12 @@ from utils.other.storage import (
 
 from utils import encryption
 from utils.log_sanitizer import sanitize
-from utils.stt.pre_recorded import deepgram_prerecorded, get_deepgram_model_for_language, postprocess_words
+from utils.stt.pre_recorded import (
+    deepgram_prerecorded,
+    deepgram_prerecorded_from_bytes,
+    get_deepgram_model_for_language,
+    postprocess_words,
+)
 from utils.stt.vad import vad_is_empty
 from utils.fair_use import (
     record_speech_ms,
@@ -469,7 +474,7 @@ def decode_opus_file_to_wav(opus_file_path, wav_file_path, sample_rate=16000, ch
                     frame_count += 1
                 except Exception as e:
                     logger.error(f"Error decoding frame {frame_count}: {e}")
-                    break
+                    continue
 
         if frame_count > 0:
             logger.info(f"Decoded audio saved to {sanitize(wav_file_path)}")
@@ -749,6 +754,18 @@ def _download_audio_bytes(url: str) -> Optional[bytes]:
         return None
 
 
+def _read_local_audio_bytes(path: str) -> Optional[bytes]:
+    """Read a local WAV segment if it is available in the backend container."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'rb') as audio_file:
+            return audio_file.read()
+    except Exception as e:
+        logger.warning(f'Failed to read local audio segment {path}: {e}')
+        return None
+
+
 def _extract_speaker_clip_wav(audio_bytes: bytes, start_sec: float, end_sec: float) -> Optional[bytes]:
     """Extract a clip from WAV audio bytes between start_sec and end_sec.
 
@@ -921,13 +938,16 @@ def process_segment(
     target_conversation_id: str = None,
 ):
     try:
-        url = get_syncing_file_temporal_signed_url(path)
+        url = None
+        audio_bytes = _read_local_audio_bytes(path)
+        if audio_bytes is None:
+            url = get_syncing_file_temporal_signed_url(path)
 
-        def delete_file():
-            time.sleep(480)
-            delete_syncing_temporal_file(path)
+            def delete_file():
+                time.sleep(480)
+                delete_syncing_temporal_file(path)
 
-        storage_executor.submit(delete_file)
+            storage_executor.submit(delete_file)
 
         # Apply user transcription preferences (vocabulary, language, model)
         prefs = transcription_prefs or {}
@@ -944,34 +964,57 @@ def process_segment(
         # When single-language mode is active, trust the user's language choice
         # rather than Deepgram's detection (avoids overriding explicit selection).
         use_return_language = not (single_language_mode and user_language)
-        words, detected_language = deepgram_prerecorded(
-            url,
-            speakers_count=3,
-            attempts=0,
-            return_language=True,
-            language=dg_language,
-            model=dg_model,
-            keywords=vocabulary if vocabulary else None,
-        )
+        if audio_bytes is not None:
+            words, detected_language = deepgram_prerecorded_from_bytes(
+                audio_bytes,
+                sample_rate=AUDIO_SAMPLE_RATE,
+                diarize=True,
+                attempts=0,
+                return_language=True,
+                language=dg_language,
+                model=dg_model,
+                keywords=vocabulary if vocabulary else None,
+            )
+        else:
+            words, detected_language = deepgram_prerecorded(
+                url,
+                speakers_count=3,
+                attempts=0,
+                return_language=True,
+                language=dg_language,
+                model=dg_model,
+                keywords=vocabulary if vocabulary else None,
+            )
         language = user_language if (single_language_mode and user_language) else detected_language
         if not words:
             # DG processed audio successfully but found no speech (silence/noise).
             # Real DG failures now raise RuntimeError and are caught by the except block.
             logger.info(f'No transcript words for segment {path} (silence or noise-only audio)')
+            if audio_bytes is not None:
+                del audio_bytes
             return
         transcript_segments: List[TranscriptSegment] = postprocess_words(words, 0)
         if not transcript_segments:
             logger.warning(f'Postprocessing returned empty for segment {path} (words present but no segments)')
+            if audio_bytes is not None:
+                del audio_bytes
             return
 
         # Speaker identification: voice embedding matching + text-based detection
-        audio_bytes = _download_audio_bytes(url) if person_embeddings_cache else None
+        if audio_bytes is not None:
+            speaker_audio_bytes = audio_bytes
+        elif person_embeddings_cache:
+            speaker_audio_bytes = _download_audio_bytes(url)
+        else:
+            speaker_audio_bytes = None
         try:
-            identify_speakers_for_segments(transcript_segments, audio_bytes, person_embeddings_cache or {}, uid)
+            identify_speakers_for_segments(transcript_segments, speaker_audio_bytes, person_embeddings_cache or {}, uid)
         except Exception as e:
             logger.warning(f'Speaker ID (sync): identification failed for {path}: {e}')
         finally:
-            if audio_bytes:
+            if speaker_audio_bytes is not None and speaker_audio_bytes is not audio_bytes:
+                del speaker_audio_bytes
+            if audio_bytes is not None:
                 del audio_bytes
 
         timestamp = get_timestamp_from_path(path)

@@ -35,6 +35,10 @@ class StorageSyncImpl implements StorageSync {
   @override
   bool get isSyncing => _isSyncing;
 
+  bool ownsWal(Wal wal) {
+    return _wals.any((w) => w.id == wal.id && w.fileNum == wal.fileNum && w.timerStart == wal.timerStart);
+  }
+
   int _totalBytesDownloaded = 0;
   DateTime? _downloadStartTime;
   double _currentSpeedKBps = 0.0;
@@ -317,14 +321,14 @@ class StorageSyncImpl implements StorageSync {
             'StorageSync: Downloading file ${i + 1}/${wals.length} (index=${wal.fileNum}, size=${wal.storageTotalBytes})');
         bool complete = await _syncSingleFile(wal, progress: progress, fileIndex: i, totalFiles: wals.length);
 
-        wal.status = WalStatus.synced;
-
         // If transfer was interrupted (BLE disconnect), save what we have and stop
         if (!complete) {
           Logger.debug('StorageSync: File ${wal.fileNum} incomplete (device disconnected), stopping download phase');
           listener.onWalUpdated();
           break;
         }
+
+        wal.status = WalStatus.synced;
 
         // Delete the file from device after successful BLE transfer (per PR #5905)
         if (wal.fileNum >= 0) {
@@ -367,18 +371,38 @@ class StorageSyncImpl implements StorageSync {
     IWalSyncProgressListener? progress,
     IWifiConnectionListener? connectionListener,
   }) async {
+    Wal walToSync = wal;
+    for (final candidate in _wals) {
+      if (candidate.id == wal.id && candidate.fileNum == wal.fileNum && candidate.timerStart == wal.timerStart) {
+        walToSync = candidate;
+        break;
+      }
+    }
+
     _resetSyncState();
     _isSyncing = true;
+    walToSync.isSyncing = true;
+    walToSync.syncStartedAt = DateTime.now();
+    walToSync.syncMethod = SyncMethod.ble;
+    listener.onWalUpdated();
 
     try {
       progress?.onWalSyncedProgress(0.0);
-      await _syncSingleFile(wal);
+      final complete = await _syncSingleFile(walToSync, progress: progress);
+      if (complete) {
+        walToSync.status = WalStatus.synced;
+        await _deleteWalsOnDevice([walToSync]);
+      }
       progress?.onWalSyncedProgress(1.0, speedKBps: _currentSpeedKBps);
-      listener.onWalUpdated();
     } catch (e) {
       Logger.debug('StorageSync: Error syncing file: $e');
     } finally {
+      walToSync.isSyncing = false;
+      walToSync.syncStartedAt = null;
+      walToSync.syncEtaSeconds = null;
+      walToSync.syncSpeedKBps = null;
       _isSyncing = false;
+      listener.onWalUpdated();
     }
 
     return SyncLocalFilesResponse(newConversationIds: [], updatedConversationIds: []);
