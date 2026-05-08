@@ -89,6 +89,7 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
   // Sync state
   SyncState _syncState = const SyncState();
   SyncState get syncState => _syncState;
+  bool _isDisposed = false;
 
   // Track WAL processing progress
   int _totalWalsToProcess = 0;
@@ -145,10 +146,12 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
 
   void _initializeProvider() async {
     await refreshWals();
-    _autoUploadPendingPhoneFiles();
+    if (_isDisposed) return;
+    _scheduleAutoUploadPendingPhoneFiles();
   }
 
   bool _isAutoUploading = false;
+  Timer? _autoUploadTimer;
   static const int _recentUnassignedPhoneWalHoldSeconds = 10 * 60;
 
   int _walEndSeconds(Wal wal) => wal.timerStart + (wal.seconds > 0 ? wal.seconds : 1);
@@ -159,9 +162,17 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
         _walEndSeconds(wal) >= nowSeconds - _recentUnassignedPhoneWalHoldSeconds;
   }
 
+  void _scheduleAutoUploadPendingPhoneFiles() {
+    _autoUploadTimer?.cancel();
+    _autoUploadTimer = Timer(const Duration(seconds: 3), () {
+      _autoUploadTimer = null;
+      unawaited(_autoUploadPendingPhoneFiles());
+    });
+  }
+
   /// Auto-upload phone WALs to cloud on app open when no sync is already in progress.
-  void _autoUploadPendingPhoneFiles() async {
-    await Future.delayed(const Duration(seconds: 3));
+  Future<void> _autoUploadPendingPhoneFiles() async {
+    if (_isDisposed) return;
     if (_syncState.isProcessing) return;
     if (_walService.getSyncs().isStorageSyncing || _walService.getSyncs().isSdCardSyncing) return;
     final phoneWals = _allWals
@@ -531,6 +542,9 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
 
   @override
   void dispose() {
+    _isDisposed = true;
+    _autoUploadTimer?.cancel();
+    _autoUploadTimer = null;
     _audioPlayerUtils.removeListener(_onAudioPlayerStateChanged);
     WaveformUtils.clearCache();
     _walService.unsubscribe(this);
