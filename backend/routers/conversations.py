@@ -721,7 +721,7 @@ def test_prompt(
 async def merge_conversations(
     request: MergeConversationsRequest,
     background_tasks: BackgroundTasks,
-    uid: str = Depends(auth.with_rate_limit(auth.get_current_user_uid, "conversations:merge")),
+    uid: str = Depends(auth.get_current_user_uid),
 ):
     """
     Merge multiple conversations into a new conversation (async).

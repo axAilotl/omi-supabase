@@ -45,7 +45,7 @@ class SharedPreferencesUtil {
   }
 
   BtDevice get btDevice {
-    final String device = getString('btDevice') ?? '';
+    final String device = getString('btDevice');
     if (device.isEmpty) return BtDevice(id: '', name: '', type: DeviceType.omi, rssi: 0);
     return BtDevice.fromJson(jsonDecode(device));
   }
@@ -341,7 +341,10 @@ class SharedPreferencesUtil {
 
   // Short conversation threshold in seconds - default is 60 (1 minute)
   // Options: 60 (1 min), 120 (2 min), 180 (3 min), 240 (4 min), 300 (5 min)
-  int get shortConversationThreshold => getInt('v2/shortConversationThreshold', defaultValue: 0);
+  int get shortConversationThreshold {
+    final value = getInt('v2/shortConversationThreshold', defaultValue: 60);
+    return value > 0 ? value : 60;
+  }
 
   set shortConversationThreshold(int value) => saveInt('v2/shortConversationThreshold', value);
 

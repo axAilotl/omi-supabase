@@ -47,6 +47,8 @@ class StorageSyncImpl implements StorageSync {
 
   StorageSyncImpl(this.listener);
 
+  static const int _minimumStorageFileSeconds = 10;
+
   @override
   void setLocalSync(LocalWalSync localSync) {
     _localSync = localSync;
@@ -184,13 +186,32 @@ class StorageSyncImpl implements StorageSync {
       String deviceModel = pd.modelNumber.isNotEmpty ? pd.modelNumber : "Omi";
 
       List<Wal> wals = [];
+      List<Wal> shortWals = [];
       for (final file in files) {
         if (file.sizeBytes <= 0) continue;
 
         int fps = codec.getFramesPerSecond();
         int frameLen = codec.getFramesLengthInBytes();
         int seconds = fps > 0 && frameLen > 0 ? (file.sizeBytes / frameLen) ~/ fps : 0;
-        if (seconds < 10) continue; // Skip very small files (<10s), same as PR #5905
+        if (seconds < _minimumStorageFileSeconds) {
+          shortWals.add(
+            Wal(
+              codec: codec,
+              timerStart: file.timestamp,
+              status: WalStatus.miss,
+              storage: WalStorage.sdcard,
+              seconds: seconds,
+              storageOffset: 0,
+              storageTotalBytes: file.sizeBytes,
+              fileNum: file.index,
+              device: _device!.id,
+              deviceModel: deviceModel,
+              totalFrames: seconds * fps,
+              syncedFrameOffset: 0,
+            ),
+          );
+          continue;
+        }
 
         wals.add(
           Wal(
@@ -214,6 +235,16 @@ class StorageSyncImpl implements StorageSync {
       wals.sort((a, b) => a.timerStart.compareTo(b.timerStart));
 
       _wals = wals;
+      if (shortWals.isNotEmpty) {
+        Logger.debug(
+          'StorageSync.refreshWalsFromDevice: deleting ${shortWals.length} short files under ${_minimumStorageFileSeconds}s',
+        );
+        DebugLogManager.logInfo('StorageSync: Deleting short device files', {
+          'count': shortWals.length,
+          'minSeconds': _minimumStorageFileSeconds,
+        });
+        await _deleteWalsOnDevice(shortWals);
+      }
       Logger.debug('StorageSync.refreshWalsFromDevice: Found ${wals.length} files to sync');
     } catch (e) {
       Logger.debug('StorageSync: Error refreshing wals from device: $e');

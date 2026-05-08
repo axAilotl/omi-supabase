@@ -918,6 +918,28 @@ def delete_blob(bucket_name: str, path: str) -> bool:
     return _delete_object(bucket_name, path)
 
 
+def upload_blob_bytes(
+    bucket_name: str,
+    path: str,
+    data: bytes,
+    content_type: str = 'application/octet-stream',
+) -> None:
+    _upload_bytes(bucket_name, path, data, content_type=content_type)
+
+
+def copy_blob(
+    bucket_name: str,
+    source_path: str,
+    destination_path: str,
+    content_type: str = 'application/octet-stream',
+) -> None:
+    data = _download_bytes(bucket_name, source_path)
+    try:
+        _upload_bytes(bucket_name, destination_path, data, content_type=content_type)
+    finally:
+        del data
+
+
 def download_speech_profile_bytes(path: str) -> bytes:
     return download_blob_bytes(speech_profiles_bucket, path)
 

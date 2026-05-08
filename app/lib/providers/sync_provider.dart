@@ -149,9 +149,17 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
   }
 
   bool _isAutoUploading = false;
+  static const int _recentUnassignedPhoneWalHoldSeconds = 10 * 60;
 
-  /// Auto-upload phone WALs to cloud on app open when device is not connected
-  /// and no sync is already in progress.
+  int _walEndSeconds(Wal wal) => wal.timerStart + (wal.seconds > 0 ? wal.seconds : 1);
+
+  bool _isRecentUnassignedPhoneWal(Wal wal, int nowSeconds) {
+    return (wal.storage == WalStorage.disk || wal.storage == WalStorage.mem) &&
+        wal.conversationId == null &&
+        _walEndSeconds(wal) >= nowSeconds - _recentUnassignedPhoneWalHoldSeconds;
+  }
+
+  /// Auto-upload phone WALs to cloud on app open when no sync is already in progress.
   void _autoUploadPendingPhoneFiles() async {
     await Future.delayed(const Duration(seconds: 3));
     if (_syncState.isProcessing) return;
@@ -160,13 +168,26 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
         .where((w) => _isPendingWal(w) && (w.storage == WalStorage.disk || w.storage == WalStorage.mem))
         .toList();
     if (phoneWals.isEmpty) return;
+
+    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final recentUnassignedCount = phoneWals.where((wal) => _isRecentUnassignedPhoneWal(wal, nowSeconds)).length;
+    if (recentUnassignedCount > 0) {
+      Logger.debug(
+        'SyncProvider: Skipping auto-upload; $recentUnassignedCount recent unassigned phone files may belong to live capture',
+      );
+      return;
+    }
+
     Logger.debug('SyncProvider: Auto-uploading ${phoneWals.length} pending phone files to cloud');
     _isAutoUploading = true;
-    await _performSync(
-      operation: () => _walService.getSyncs().phone.syncAll(progress: this),
-      context: 'auto-upload phone files',
-    );
-    _isAutoUploading = false;
+    try {
+      await _performSync(
+        operation: () => _walService.getSyncs().phone.syncAll(progress: this),
+        context: 'auto-upload phone files',
+      );
+    } finally {
+      _isAutoUploading = false;
+    }
   }
 
   /// Cancel auto-upload if running. Called before device-triggered sync.
@@ -246,16 +267,17 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
     try {
       _updateSyncState(_syncState.toSyncing());
 
-      // Check for SD card WALs - if present, log two-phase sync
-      final sdCardWals = missingWals.where((w) => w.storage == WalStorage.sdcard).toList();
-      if (sdCardWals.isNotEmpty) {
-        Logger.debug('SyncProvider: Two-phase sync - ${sdCardWals.length} SD card files will be downloaded first');
+      final deviceWals = missingWalsOnDevice;
+      if (deviceWals.isNotEmpty) {
+        Logger.debug(
+          'SyncProvider: staged sync - phone files upload before ${deviceWals.length} device files download',
+        );
       }
 
       DebugLogManager.logInfo('SyncProvider: starting $context', {
         'totalMissing': missingWals.length,
-        'sdCardWals': sdCardWals.length,
-        'deviceWals': missingWalsOnDevice.length,
+        'sdCardWals': deviceWals.where((w) => w.storage == WalStorage.sdcard).length,
+        'deviceWals': deviceWals.length,
       });
 
       final result = await operation();

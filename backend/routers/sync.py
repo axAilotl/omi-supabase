@@ -75,12 +75,14 @@ from utils.stt.speaker_embedding import (
     compare_embeddings,
     SPEAKER_MATCH_THRESHOLD,
 )
+from utils.sync_filters import MIN_SYNC_AUDIO_SECONDS, should_skip_sync_audio_duration, should_skip_sync_transcript
 from utils.subscription import has_transcription_credits
 
 logger = logging.getLogger(__name__)
 
 # Audio constants
 AUDIO_SAMPLE_RATE = 16000
+RECENT_UNASSIGNED_PHONE_SYNC_HOLD_SECONDS = 10 * 60
 
 router = APIRouter()
 
@@ -500,6 +502,39 @@ def get_timestamp_from_path(path: str):
     return timestamp
 
 
+def _reject_recent_unassigned_phone_sync(files: List[UploadFile], conversation_id: str | None, uid: str):
+    if conversation_id:
+        return
+
+    now = time.time()
+    recent_count = 0
+    for file in files:
+        filename = file.filename or ''
+        if 'limitless' in filename.lower():
+            continue
+        try:
+            timestamp = get_timestamp_from_path(filename)
+        except (ValueError, IndexError):
+            continue
+        if 0 <= now - timestamp <= RECENT_UNASSIGNED_PHONE_SYNC_HOLD_SECONDS:
+            recent_count += 1
+
+    if recent_count == 0:
+        return
+
+    logger.warning(
+        'Rejecting recent unassigned phone sync upload uid=%s file_count=%s recent_count=%s hold_seconds=%s',
+        uid,
+        len(files),
+        recent_count,
+        RECENT_UNASSIGNED_PHONE_SYNC_HOLD_SECONDS,
+    )
+    raise HTTPException(
+        status_code=409,
+        detail='Recent phone backup audio must be attached to a live conversation before sync.',
+    )
+
+
 def retrieve_file_paths(files: List[UploadFile], uid: str):
     directory = f'syncing/{uid}/'
     os.makedirs(directory, exist_ok=True)
@@ -632,6 +667,12 @@ def decode_files_to_wav(files_path: List[str]):
         if duration < 1:
             os.remove(wav_path)
             continue
+        if should_skip_sync_audio_duration(duration):
+            logger.info(
+                f'Skipping short sync audio {sanitize(wav_path)}: ' f'{duration:.2f}s < {MIN_SYNC_AUDIO_SECONDS}s'
+            )
+            os.remove(wav_path)
+            continue
         wav_files.append(wav_path)
     return wav_files
 
@@ -670,7 +711,14 @@ def retrieve_vad_segments(path: str, segmented_paths: set, errors: list = None):
 
     try:
         for i, segment in enumerate(segments):
-            if (segment['end'] - segment['start']) < 1:
+            segment_duration = segment['end'] - segment['start']
+            if segment_duration < 1:
+                continue
+            if should_skip_sync_audio_duration(segment_duration):
+                logger.info(
+                    f'Skipping short VAD sync segment from {sanitize(path)}: '
+                    f'{segment_duration:.2f}s < {MIN_SYNC_AUDIO_SECONDS}s'
+                )
                 continue
             segment_timestamp = start_timestamp + segment['start']
             segment_path = f'{path_dir}/{segment_timestamp}.wav'
@@ -999,6 +1047,14 @@ def process_segment(
             if audio_bytes is not None:
                 del audio_bytes
             return
+        segment_audio_duration = get_wav_duration(path)
+        if should_skip_sync_transcript(transcript_segments, duration_seconds=segment_audio_duration):
+            logger.info(
+                f'Skipping low-value sync transcript for segment {path} ' f'duration={segment_audio_duration:.2f}s'
+            )
+            if audio_bytes is not None:
+                del audio_bytes
+            return
 
         # Speaker identification: voice embedding matching + text-based detection
         if audio_bytes is not None:
@@ -1138,6 +1194,7 @@ async def sync_local_files(
     # Pre-check gates (#5854)
     if is_hard_restricted(uid):
         raise HTTPException(status_code=429, detail="Account temporarily restricted due to fair-use policy")
+    _reject_recent_unassigned_phone_sync(files, conversation_id, uid)
 
     # Check credits: if exhausted, still process but lock the conversation so user can pay to unlock
     should_lock = not has_transcription_credits(uid)
@@ -1466,6 +1523,7 @@ async def sync_local_files_v2(
     # Pre-check gates (same as v1)
     if is_hard_restricted(uid):
         raise HTTPException(status_code=429, detail="Account temporarily restricted due to fair-use policy")
+    _reject_recent_unassigned_phone_sync(files, conversation_id, uid)
 
     should_lock = not has_transcription_credits(uid)
 

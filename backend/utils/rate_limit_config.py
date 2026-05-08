@@ -38,7 +38,6 @@ RATE_POLICIES: dict[str, tuple[int, int]] = {
     # Conversations — each triggers ~22 OpenAI calls
     "conversations:create": (10, 3600),
     "conversations:reprocess": (3, 3600),
-    "conversations:merge": (5, 3600),
     # Chat — 2-6 LLM calls per message
     "chat:send_message": (120, 3600),
     "chat:initial": (60, 3600),

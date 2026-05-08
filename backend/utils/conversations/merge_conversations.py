@@ -20,11 +20,10 @@ from models.conversation import Conversation
 from models.conversation_enums import ConversationStatus
 from models.structured import Structured
 from utils.other.storage import (
+    copy_blob,
     delete_conversation_audio_files,
     list_audio_chunks,
-    storage_client,
     private_cloud_sync_bucket,
-    _get_extension_for_path,
 )
 import logging
 
@@ -349,7 +348,6 @@ def _copy_audio_chunks_for_merge(
     Returns:
         List of AudioFile objects
     """
-    bucket = storage_client.bucket(private_cloud_sync_bucket)
     has_chunks = False
 
     for conv in conversations:
@@ -364,8 +362,7 @@ def _copy_audio_chunks_for_merge(
                 # Preserve original filename (handles both single and batch blob naming)
                 original_filename = chunk['path'].split('/')[-1]
                 new_path = f'chunks/{uid}/{new_conversation_id}/{original_filename}'
-                source_blob = bucket.blob(chunk['path'])
-                bucket.copy_blob(source_blob, bucket, new_path)
+                copy_blob(private_cloud_sync_bucket, chunk['path'], new_path)
 
         except Exception as e:
             logger.error(f"Error copying chunks for {conv_id}: {e}")

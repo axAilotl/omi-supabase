@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
-import 'package:meta/meta.dart';
 
 import 'package:omi/backend/preferences.dart';
 import 'package:omi/models/sync_state.dart';
@@ -19,6 +18,8 @@ import 'package:omi/utils/wal_file_manager.dart';
 class LocalWalSyncImpl implements LocalWalSync {
   static const int _sessionAssociationGraceSeconds = 120;
   static const int _orphanRetryCooldownSeconds = 300;
+  static const int _minimumUnassignedUploadSeconds = 10;
+  static const int _uploadBatchSize = 4;
 
   List<Wal> _wals = const [];
 
@@ -51,6 +52,87 @@ class LocalWalSyncImpl implements LocalWalSync {
   LocalWalSyncImpl(this.listener);
 
   bool _isPendingUploadStatus(WalStatus status) => status == WalStatus.miss || status == WalStatus.corrupted;
+
+  bool _isShortUnassignedUploadWal(Wal wal) {
+    return wal.storage == WalStorage.disk &&
+        wal.conversationId == null &&
+        wal.seconds < _minimumUnassignedUploadSeconds;
+  }
+
+  bool _requiresSequentialUpload(Wal wal) {
+    return wal.conversationId == null;
+  }
+
+  bool _canUploadInSameBatch(Wal first, Wal candidate) {
+    if (_requiresSequentialUpload(first) || _requiresSequentialUpload(candidate)) return false;
+    return first.conversationId == candidate.conversationId;
+  }
+
+  bool _continuesInferredSession(Wal? previous, Wal candidate) {
+    if (previous == null) return false;
+    if (previous.device != candidate.device) return false;
+
+    final previousEnd = previous.timerStart + (previous.seconds > 0 ? previous.seconds : 1);
+    final gapSeconds = candidate.timerStart - previousEnd;
+    return gapSeconds <= _sessionAssociationGraceSeconds;
+  }
+
+  String? _conversationIdForBatch(List<Wal> batch) {
+    if (batch.isEmpty) return null;
+    final conversationId = batch.first.conversationId;
+    if (conversationId == null) return null;
+    return batch.every((wal) => wal.conversationId == conversationId) ? conversationId : null;
+  }
+
+  String? _singleConversationIdFromResponse(SyncLocalFilesResponse response) {
+    final ids = <String>{
+      ...response.newConversationIds,
+      ...response.updatedConversationIds,
+    };
+    return ids.length == 1 ? ids.first : null;
+  }
+
+  void _stampUpcomingInferredSession(List<Wal> sortedWals, int startIndex, Wal anchor, String conversationId) {
+    var previous = anchor;
+    var stamped = 0;
+    for (var i = startIndex; i < sortedWals.length; i++) {
+      final wal = sortedWals[i];
+      if (wal.conversationId != null) {
+        if (wal.conversationId != conversationId || !_continuesInferredSession(previous, wal)) break;
+        previous = wal;
+        continue;
+      }
+      if (!_continuesInferredSession(previous, wal)) break;
+      wal.conversationId = conversationId;
+      wal.retryCount = 0;
+      wal.lastRetryAt = 0;
+      previous = wal;
+      stamped++;
+    }
+    if (stamped > 0) {
+      Logger.debug('LocalWalSync: stamped $stamped upcoming WALs with inferred conversation $conversationId');
+    }
+  }
+
+  Future<int> _discardShortUnassignedUploadWals(String reason) async {
+    final shortWals = _wals.where((w) => _isPendingUploadStatus(w.status) && _isShortUnassignedUploadWal(w)).toList();
+    if (shortWals.isEmpty) return 0;
+
+    int deletedCount = 0;
+    for (final wal in shortWals) {
+      final deleted = await _deleteWal(wal);
+      if (deleted) deletedCount++;
+    }
+
+    await _saveWalsToFile();
+    listener.onWalUpdated();
+    DebugLogManager.logInfo('Discarded short unassigned WALs', {
+      'count': deletedCount,
+      'reason': reason,
+      'minSeconds': _minimumUnassignedUploadSeconds,
+    });
+    return deletedCount;
+  }
 
   bool _canRetryPendingWal(Wal wal, int nowSeconds) {
     if (wal.retryCount < 3) return true;
@@ -139,6 +221,7 @@ class LocalWalSyncImpl implements LocalWalSync {
 
     // Fix any inconsistent WAL states from old implementations
     await WalFileManager.migrateInconsistentWals(_wals);
+    await _discardShortUnassignedUploadWals('startup');
 
     if (!_walReady.isCompleted) _walReady.complete();
     listener.onWalUpdated();
@@ -207,7 +290,7 @@ class LocalWalSyncImpl implements LocalWalSync {
           break;
         }
       }
-      Logger.debug("${low} - ${high} - ${syncedOffset} - ${chunkFrameCount} - ${_framesPerSecond}");
+      Logger.debug("$low - $high - $syncedOffset - $chunkFrameCount - $_framesPerSecond");
 
       Wal wal;
       var walIdx = _wals.indexWhere(
@@ -328,6 +411,7 @@ class LocalWalSyncImpl implements LocalWalSync {
 
   @override
   Future<List<Wal>> getMissingWals() async {
+    await _discardShortUnassignedUploadWals('missing-list');
     return _wals.where((w) => _isPendingUploadStatus(w.status)).toList();
   }
 
@@ -340,6 +424,7 @@ class LocalWalSyncImpl implements LocalWalSync {
           (w) =>
               _isPendingUploadStatus(w.status) &&
               w.storage == WalStorage.disk &&
+              !_isShortUnassignedUploadWal(w) &&
               _walOverlapsSession(w, sessionStartSeconds, now),
         )
         .toList();
@@ -456,6 +541,7 @@ class LocalWalSyncImpl implements LocalWalSync {
               _isPendingUploadStatus(w.status) &&
               w.storage == WalStorage.disk &&
               w.conversationId == null &&
+              !_isShortUnassignedUploadWal(w) &&
               now - w.timerStart <= maxAgeSeconds &&
               _canRetryPendingWal(w, now),
         )
@@ -484,6 +570,7 @@ class LocalWalSyncImpl implements LocalWalSync {
 
   @override
   Future<List<Wal>> getAllWals() async {
+    await _discardShortUnassignedUploadWals('all-list');
     return List.from(_wals);
   }
 
@@ -532,6 +619,8 @@ class LocalWalSyncImpl implements LocalWalSync {
     _isCancelled = false;
     _accumulatedResponse = null;
 
+    await _discardShortUnassignedUploadWals('sync-all');
+
     var wals = _wals.where((w) => _isPendingUploadStatus(w.status) && w.storage == WalStorage.disk).toList();
     if (wals.isEmpty) {
       Logger.debug("All synced!");
@@ -550,14 +639,18 @@ class LocalWalSyncImpl implements LocalWalSync {
     int filesUploaded = 0;
     final totalFilesToUpload = wals.length;
 
-    const batchSize = 1;
-    for (var i = wals.length - 1; i >= 0; i -= batchSize) {
+    wals.sort((a, b) => a.timerStart.compareTo(b.timerStart));
+
+    Wal? lastUnassignedWal;
+    String? inferredSessionConversationId;
+    var batchStart = 0;
+    while (batchStart < wals.length) {
       if (_isCancelled) {
         Logger.debug("LocalWalSync: Upload cancelled");
         DebugLogManager.logWarning('Local upload cancelled', {
           'batchesCompleted': batchesCompleted,
           'batchesFailed': batchesFailed,
-          'walsRemaining': i + 1,
+          'walsRemaining': wals.length - batchStart,
         });
         // Clear isSyncing on all WALs that were marked for this batch
         for (final w in wals) {
@@ -569,14 +662,31 @@ class LocalWalSyncImpl implements LocalWalSync {
         listener.onWalUpdated();
         break;
       }
-      var right = i;
-      var left = right - batchSize + 1;
-      if (left < 0) {
-        left = 0;
+
+      final firstWal = wals[batchStart];
+      final continuesInferredSession = firstWal.conversationId == null &&
+          _continuesInferredSession(lastUnassignedWal, firstWal) &&
+          inferredSessionConversationId != null;
+      final batchConversationId =
+          firstWal.conversationId ?? (continuesInferredSession ? inferredSessionConversationId : null);
+      final maxBatchSize = firstWal.conversationId == null && batchConversationId == null ? 1 : _uploadBatchSize;
+      var batchEnd = batchStart + 1;
+      while (batchEnd < wals.length && batchEnd - batchStart < maxBatchSize) {
+        final candidate = wals[batchEnd];
+        if (firstWal.conversationId == null) {
+          if (candidate.conversationId != null || !_continuesInferredSession(wals[batchEnd - 1], candidate)) {
+            break;
+          }
+        } else if (!_canUploadInSameBatch(firstWal, candidate)) {
+          break;
+        }
+        batchEnd++;
       }
 
       List<File> files = [];
-      for (var j = left; j <= right; j++) {
+      List<int> uploadableIndexes = [];
+      List<Wal> uploadableWals = [];
+      for (var j = batchStart; j < batchEnd; j++) {
         var wal = wals[j];
         Logger.debug("sync id ${wal.id} ${wal.timerStart}");
         if (wal.filePath == null) {
@@ -611,6 +721,8 @@ class LocalWalSyncImpl implements LocalWalSync {
             continue;
           }
           files.add(file);
+          uploadableIndexes.add(j);
+          uploadableWals.add(wal);
           wal.isSyncing = true;
         } catch (e) {
           wal.status = WalStatus.corrupted;
@@ -624,6 +736,7 @@ class LocalWalSyncImpl implements LocalWalSync {
         Logger.debug("Files are empty");
         await _saveWalsToFile();
         listener.onWalUpdated();
+        batchStart = batchEnd;
         continue;
       }
 
@@ -637,6 +750,7 @@ class LocalWalSyncImpl implements LocalWalSync {
 
       listener.onWalUpdated();
       try {
+        final conversationId = _conversationIdForBatch(uploadableWals) ?? batchConversationId;
         var partialRes = await syncLocalFilesV2(
           files,
           onPollProgress: (jobStatus) {
@@ -647,6 +761,7 @@ class LocalWalSyncImpl implements LocalWalSync {
               totalFiles: jobStatus.totalSegments,
             );
           },
+          conversationId: conversationId,
         );
 
         resp.newConversationIds.addAll(
@@ -671,7 +786,9 @@ class LocalWalSyncImpl implements LocalWalSync {
 
         batchesCompleted++;
 
-        for (var j = left; j <= right; j++) {
+        final resolvedConversationId = conversationId ?? _singleConversationIdFromResponse(partialRes);
+
+        for (final j in uploadableIndexes) {
           if (j < wals.length) {
             var wal = wals[j];
             if (partialRes.hasPartialFailure) {
@@ -681,6 +798,9 @@ class LocalWalSyncImpl implements LocalWalSync {
               wals[j].syncStartedAt = null;
               wals[j].syncEtaSeconds = null;
             } else {
+              if (wal.conversationId == null && resolvedConversationId != null) {
+                wal.conversationId = resolvedConversationId;
+              }
               wals[j].status = WalStatus.synced;
               wals[j].isSyncing = false;
               wals[j].syncStartedAt = null;
@@ -689,16 +809,23 @@ class LocalWalSyncImpl implements LocalWalSync {
             }
           }
         }
+        if (!partialRes.hasPartialFailure && uploadableWals.isNotEmpty && firstWal.conversationId == null) {
+          lastUnassignedWal = uploadableWals.last;
+          inferredSessionConversationId = resolvedConversationId;
+          if (resolvedConversationId != null) {
+            _stampUpcomingInferredSession(wals, batchEnd, uploadableWals.last, resolvedConversationId);
+          }
+        }
         // Count actual synced WALs instead of accumulating attempted files.
         filesUploaded = wals.where((w) => w.status == WalStatus.synced).length;
       } catch (e) {
-        print('Local WAL sync batch failed: $e, continuing with remaining files');
+        Logger.debug('Local WAL sync batch failed: $e, continuing with remaining files');
         batchesFailed++;
         DebugLogManager.logError(e, null, 'Local upload batch failed: ${e.toString()}', {
-          'batchIndex': (wals.length - 1 - i) ~/ batchSize,
+          'batchIndex': batchesCompleted + batchesFailed,
           'filesInBatch': files.length,
         });
-        for (var j = left; j <= right; j++) {
+        for (final j in uploadableIndexes) {
           if (j < wals.length) {
             wals[j].isSyncing = false;
             wals[j].syncStartedAt = null;
@@ -709,6 +836,7 @@ class LocalWalSyncImpl implements LocalWalSync {
 
       await _saveWalsToFile();
       listener.onWalUpdated();
+      batchStart = batchEnd;
     }
 
     DebugLogManager.logEvent('local_upload_finished', {
@@ -734,6 +862,18 @@ class LocalWalSyncImpl implements LocalWalSync {
     var walToSync = _wals.where((w) => w == wal).toList().first;
 
     var resp = SyncLocalFilesResponse(newConversationIds: [], updatedConversationIds: []);
+
+    if (_isPendingUploadStatus(walToSync.status) && _isShortUnassignedUploadWal(walToSync)) {
+      await _deleteWal(walToSync);
+      await _saveWalsToFile();
+      listener.onWalUpdated();
+      DebugLogManager.logInfo('Single WAL upload discarded short unassigned WAL', {
+        'walId': walToSync.id,
+        'seconds': walToSync.seconds,
+        'minSeconds': _minimumUnassignedUploadSeconds,
+      });
+      return resp;
+    }
 
     DebugLogManager.logInfo('Single WAL upload started', {
       'walId': wal.id,
@@ -766,7 +906,7 @@ class LocalWalSyncImpl implements LocalWalSync {
       }
     } catch (e) {
       wal.status = WalStatus.corrupted;
-      print(e.toString());
+      Logger.debug(e.toString());
       DebugLogManager.logError(e, null, 'Single WAL corrupted: unexpected error - ${e.toString()}', {'walId': wal.id});
     }
 
@@ -782,6 +922,7 @@ class LocalWalSyncImpl implements LocalWalSync {
             totalFiles: jobStatus.totalSegments,
           );
         },
+        conversationId: walToSync.conversationId,
       );
 
       resp.newConversationIds.addAll(

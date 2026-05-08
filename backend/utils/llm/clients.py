@@ -52,6 +52,9 @@ class _OpenAIChatProxy:
     def __getattr__(self, name: str):
         return getattr(self._resolve(), name)
 
+    def __call__(self, input, *args, **kwargs):
+        return self._resolve().invoke(input, *args, **kwargs)
+
     # Needed for `prompt | model | parser`-style chain composition.
     def __or__(self, other):
         return self._resolve() | other
@@ -109,6 +112,9 @@ class _OpenRouterGeminiProxy:
 
     def __getattr__(self, name: str):
         return getattr(self._resolve(), name)
+
+    def __call__(self, input, *args, **kwargs):
+        return self._resolve().invoke(input, *args, **kwargs)
 
     def __or__(self, other):
         return self._resolve() | other
@@ -388,6 +394,13 @@ def get_model(feature: str) -> str:
 _llm_cache: Dict[tuple, Any] = {}
 
 
+def _resolve_langchain_client(client: Any) -> Any:
+    resolve = getattr(client, '_resolve', None)
+    if callable(resolve):
+        return resolve()
+    return client
+
+
 def _get_or_create_openai_llm(model_name: str, streaming: bool = False) -> _OpenAIChatProxy:
     """Get or create a BYOK-aware ChatOpenAI proxy for an OpenAI model."""
     key = (model_name, streaming, 'openai')
@@ -471,9 +484,9 @@ def get_llm(feature: str, streaming: bool = False, cache_key: Optional[str] = No
 
     if provider == 'openrouter':
         temp = _OPENROUTER_TEMPERATURES.get(feature)
-        return _get_or_create_openrouter_llm(model, streaming, temp)
+        return _resolve_langchain_client(_get_or_create_openrouter_llm(model, streaming, temp))
 
-    llm = _get_or_create_openai_llm(model, streaming)
+    llm = _resolve_langchain_client(_get_or_create_openai_llm(model, streaming))
     if cache_key and model in _CACHE_KEY_MODELS:
         return llm.bind(prompt_cache_key=cache_key)
     return llm
@@ -631,6 +644,9 @@ class _AnthropicViaOpenAIProxy:
 
     def __getattr__(self, name: str):
         return getattr(self._resolve(), name)
+
+    def __call__(self, input, *args, **kwargs):
+        return self._resolve().invoke(input, *args, **kwargs)
 
     def __or__(self, other):
         return self._resolve() | other

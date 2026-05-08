@@ -33,16 +33,19 @@ Wal _makeWal({
   required int timerStart,
   WalStatus status = WalStatus.miss,
   WalStorage storage = WalStorage.disk,
+  WalStorage? originalStorage,
   String device = 'omi',
+  int seconds = 60,
 }) {
   return Wal(
     timerStart: timerStart,
     codec: BleAudioCodec.opus,
-    seconds: 60,
+    seconds: seconds,
     status: status,
     storage: storage,
+    originalStorage: originalStorage,
     device: device,
-    filePath: 'test_audio_${timerStart}.bin',
+    filePath: 'test_audio_$timerStart.bin',
   );
 }
 
@@ -100,6 +103,40 @@ void main() {
 
       expect(result.length, 2);
       expect(result.map((w) => w.status), [WalStatus.miss, WalStatus.corrupted]);
+    });
+  });
+
+  group('syncAll', () {
+    test('deletes short unassigned phone WALs instead of uploading them', () async {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final shortWal = _makeWal(timerStart: now - 30, seconds: 5);
+      File('${tempDir.path}/${shortWal.filePath}').writeAsBytesSync([1, 2, 3]);
+      sync.testWals = [shortWal];
+
+      final result = await sync.syncAll();
+
+      expect(result, isNull);
+      expect(sync.testWals, isEmpty);
+      expect(File('${tempDir.path}/${shortWal.filePath}').existsSync(), false);
+      expect(listener.syncedWals, isEmpty);
+    });
+
+    test('deletes short unassigned WALs downloaded from device storage', () async {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final shortWal = _makeWal(
+        timerStart: now - 30,
+        seconds: 5,
+        originalStorage: WalStorage.sdcard,
+        device: 'dk2',
+      );
+      File('${tempDir.path}/${shortWal.filePath}').writeAsBytesSync([1, 2, 3]);
+      sync.testWals = [shortWal];
+
+      final result = await sync.getMissingWals();
+
+      expect(result, isEmpty);
+      expect(sync.testWals, isEmpty);
+      expect(File('${tempDir.path}/${shortWal.filePath}').existsSync(), false);
     });
   });
 

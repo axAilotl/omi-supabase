@@ -77,6 +77,30 @@ from utils.other.storage import precache_conversation_audio
 logger = logging.getLogger(__name__)
 
 
+_SHORT_LOW_VALUE_SUMMARY_PHRASES = (
+    'brief',
+    'fragmented',
+    'hard-to-follow',
+    'difficult to parse',
+    'incomplete',
+    'unclear',
+    'no clear',
+    'no actionable',
+    'no specific',
+    'cuts off',
+)
+
+
+def _should_discard_short_structured(structured: Structured, duration_seconds: Optional[float]) -> bool:
+    if duration_seconds is None or duration_seconds >= 120:
+        return False
+    if structured.action_items or structured.events:
+        return False
+
+    summary_text = f'{structured.title or ""} {structured.overview or ""}'.lower()
+    return any(phrase in summary_text for phrase in _SHORT_LOW_VALUE_SUMMARY_PHRASES)
+
+
 def _get_structured(
     uid: str,
     language_code: str,
@@ -209,6 +233,8 @@ def _get_structured(
                 calendar_meeting_context=calendar_context,
                 output_language_code=user_language,
             )
+        if _should_discard_short_structured(structured, duration_seconds):
+            return Structured(emoji=random.choice(['🧠', '🎉'])), True
         return structured, False
     except Exception as e:
         logger.error(e)

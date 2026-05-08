@@ -586,6 +586,7 @@ from unittest.mock import MagicMock, patch
 _STUB_MODULES = [
     'models',
     'models.conversation',
+    'models.conversation_enums',
     'models.transcript_segment',
     'database._client',
     'database.redis_db',
@@ -605,7 +606,11 @@ _STUB_MODULES = [
     'utils.stt.vad',
     'utils.fair_use',
     'utils.subscription',
+    'utils.conversations.factory',
     'utils.conversations.process_conversation',
+    'utils.speaker_assignment',
+    'utils.speaker_identification',
+    'utils.stt.speaker_embedding',
 ]
 
 
@@ -648,7 +653,9 @@ class TestProcessSegmentReal:
         sys.modules['utils.log_sanitizer'].sanitize = lambda value: value
         sys.modules['utils.encryption'].encrypt = MagicMock()
         sys.modules['utils.stt.pre_recorded'].deepgram_prerecorded = MagicMock()
+        sys.modules['utils.stt.pre_recorded'].deepgram_prerecorded_from_bytes = MagicMock()
         sys.modules['utils.stt.pre_recorded'].postprocess_words = MagicMock()
+        sys.modules['utils.stt.pre_recorded'].get_deepgram_model_for_language = MagicMock(return_value=('en', 'nova-3'))
         sys.modules['utils.stt.vad'].vad_is_empty = MagicMock()
         sys.modules['utils.fair_use'].FAIR_USE_ENABLED = False
         sys.modules['utils.fair_use'].FAIR_USE_RESTRICT_DAILY_DG_MS = 0
@@ -661,10 +668,17 @@ class TestProcessSegmentReal:
         sys.modules['utils.fair_use'].get_enforcement_stage = MagicMock(return_value='off')
         sys.modules['utils.fair_use'].record_dg_usage_ms = MagicMock()
         sys.modules['utils.subscription'].has_transcription_credits = MagicMock(return_value=True)
+        sys.modules['utils.conversations.factory'].deserialize_conversation = MagicMock()
         sys.modules['utils.conversations.process_conversation'].process_conversation = MagicMock()
+        sys.modules['utils.speaker_assignment'].process_speaker_assigned_segments = MagicMock()
+        sys.modules['utils.speaker_identification'].detect_speaker_from_text = MagicMock(return_value=None)
+        sys.modules['utils.stt.speaker_embedding'].extract_embedding_from_bytes = MagicMock()
+        sys.modules['utils.stt.speaker_embedding'].compare_embeddings = MagicMock(return_value=(False, 0.0))
+        sys.modules['utils.stt.speaker_embedding'].SPEAKER_MATCH_THRESHOLD = 0.75
 
         class _ConversationSource:
             omi = 'omi'
+            limitless = 'limitless'
 
         class _CreateConversation:
             def __init__(self, **kwargs):
@@ -684,10 +698,14 @@ class TestProcessSegmentReal:
         sys.modules['models.conversation'].ConversationSource = _ConversationSource
         sys.modules['models.conversation'].CreateConversation = _CreateConversation
         sys.modules['models.conversation'].Conversation = _Conversation
+        sys.modules['models.conversation_enums'].ConversationSource = _ConversationSource
         sys.modules['models.transcript_segment'].TranscriptSegment = _TranscriptSegment
 
         # Import under stubs
         from routers.sync import process_segment
+        import routers.sync as sync_module
+
+        sync_module.storage_executor.submit = MagicMock()
 
         cls._process_segment = staticmethod(process_segment)
 
@@ -779,7 +797,7 @@ class TestProcessSegmentReal:
         """Create a real TranscriptSegment for Pydantic validation."""
         from models.transcript_segment import TranscriptSegment
 
-        return TranscriptSegment(text='hello', speaker='SPEAKER_00', is_user=False, start=0.0, end=5.0)
+        return TranscriptSegment(text='buy milk tomorrow', speaker='SPEAKER_00', is_user=False, start=0.0, end=5.0)
 
     def test_success_adds_to_new_memories(self):
         """Real process_segment: success path creates conversation and adds to response."""
@@ -793,7 +811,7 @@ class TestProcessSegmentReal:
         mock_conv = MagicMock()
         mock_conv.id = 'conv-abc123'
 
-        with patch('routers.sync.deepgram_prerecorded', return_value=([{'text': 'hello'}], 'en')), patch(
+        with patch('routers.sync.deepgram_prerecorded', return_value=([{'text': 'buy milk tomorrow'}], 'en')), patch(
             'routers.sync.postprocess_words', return_value=[real_segment]
         ), patch('routers.sync.get_timestamp_from_path', return_value=1700000000.0), patch(
             'routers.sync.get_closest_conversation_to_timestamps', return_value=None
@@ -824,13 +842,13 @@ class TestProcessSegmentReal:
         call_count = [0]
         call_lock = threading.Lock()
 
-        def mock_deepgram_mixed(url, speakers_count=3, attempts=0, return_language=True):
+        def mock_deepgram_mixed(url, speakers_count=3, attempts=0, return_language=True, **kwargs):
             with call_lock:
                 call_count[0] += 1
                 n = call_count[0]
             if n == 2:
                 raise ConnectionError('Deepgram timeout')  # Segment 2 fails with exception
-            return [{'text': 'hello'}], 'en'
+            return [{'text': 'buy milk tomorrow'}], 'en'
 
         real_segment = self._make_real_segment()
         mock_conv = MagicMock()
@@ -1062,6 +1080,7 @@ class TestVoiceMessageRuntimeErrorHandling:
 
         # STT stubs
         sys.modules['utils.stt.pre_recorded'].deepgram_prerecorded = MagicMock()
+        sys.modules['utils.stt.pre_recorded'].deepgram_prerecorded_from_bytes = MagicMock()
         sys.modules['utils.stt.pre_recorded'].postprocess_words = MagicMock()
         sys.modules['utils.stt.pre_recorded'].get_deepgram_model_for_language = MagicMock(return_value=('en', 'nova-3'))
 
@@ -1127,5 +1146,5 @@ class TestVoiceMessageRuntimeErrorHandling:
                     chunks.append(chunk)
             return chunks
 
-        result = asyncio.get_event_loop().run_until_complete(run())
+        result = asyncio.run(run())
         assert result == [], f"Expected no chunks, got {result}"

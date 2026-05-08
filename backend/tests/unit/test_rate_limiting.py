@@ -17,6 +17,7 @@ for mod_name in [
     'google.cloud.firestore',
     'database.redis_db',
     'database.auth',
+    'database.users',
 ]:
     if mod_name not in sys.modules:
         sys.modules[mod_name] = types.ModuleType(mod_name)
@@ -43,6 +44,7 @@ firebase_auth.InvalidIdTokenError = type('InvalidIdTokenError', (Exception,), {}
 redis_db_stub = sys.modules['database.redis_db']
 redis_db_stub._RATE_LIMIT_LUA = MagicMock(return_value=[1, 3600])
 redis_db_stub.try_acquire_listen_lock = MagicMock(return_value=True)
+redis_db_stub.try_acquire_user_platform_write_lock = MagicMock(return_value=True)
 
 
 def _check_rate_limit(key, policy, max_requests, window):
@@ -56,6 +58,9 @@ def _check_rate_limit(key, policy, max_requests, window):
 
 
 redis_db_stub.check_rate_limit = _check_rate_limit
+
+users_stub = sys.modules['database.users']
+users_stub.record_user_platform = MagicMock()
 
 from utils.rate_limit_config import RATE_POLICIES, get_effective_limit, RATE_LIMIT_BOOST
 
@@ -323,7 +328,6 @@ class TestRouterPolicyMapping(unittest.TestCase):
             "conversations:create",
             "conversations:reprocess",
             "conversations:search",
-            "conversations:merge",
             "chat:send_message",
             "chat:initial",
             "voice:message",
@@ -369,8 +373,8 @@ class TestRouterWiring(unittest.TestCase):
 
     def test_conversations_router_has_rate_limits(self):
         matches = self._grep_file("routers/conversations.py", r"with_rate_limit.*conversations:")
-        # create, reprocess, search, merge = 4 endpoints
-        self.assertEqual(len(matches), 4, f"conversations.py expected 4 rate limits, got {len(matches)}")
+        # create, reprocess, search = 3 endpoints. Merge is intentionally unthrottled on private infra.
+        self.assertEqual(len(matches), 3, f"conversations.py expected 3 rate limits, got {len(matches)}")
 
     def test_chat_router_has_rate_limits(self):
         matches = self._grep_file("routers/chat.py", r"with_rate_limit.*(?:chat:|voice:|file:)")

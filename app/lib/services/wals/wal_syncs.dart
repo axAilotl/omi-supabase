@@ -30,6 +30,7 @@ class WalSyncs implements IWalSync {
   final IWalSyncListener listener;
 
   bool _isCancelled = false;
+  SyncLocalFilesResponse? _accumulatedResponse;
 
   WalSyncs(this.listener) {
     _phoneSync = LocalWalSyncImpl(listener);
@@ -178,6 +179,7 @@ class WalSyncs implements IWalSync {
   }) async {
     _isCancelled = false;
     var resp = SyncLocalFilesResponse(newConversationIds: [], updatedConversationIds: []);
+    _accumulatedResponse = resp;
 
     final allMissing = await getMissingWals();
     DebugLogManager.logEvent('sync_started', {
@@ -187,13 +189,40 @@ class WalSyncs implements IWalSync {
       'phone': allMissing.where((w) => w.storage == WalStorage.disk || w.storage == WalStorage.mem).length,
     });
 
-    // Phase 0: New multi-file storage sync (for new firmware with LittleFS)
-    // Refresh file list from device via BLE (safe — not syncing yet)
+    final hasPhoneUploads = allMissing.any((w) => w.storage == WalStorage.disk || w.storage == WalStorage.mem);
+    if (hasPhoneUploads) {
+      await _uploadPhoneFilesToCloud(
+        resp,
+        progress,
+        logLabel: 'Sync Phase 0: Uploading phone files before device download',
+      );
+    }
+
+    if (_isCancelled) {
+      Logger.debug("WalSyncs: Cancelled after initial phone upload phase");
+      DebugLogManager.logWarning('Sync cancelled after initial phone upload phase');
+      return resp;
+    }
+
+    if (hasPhoneUploads) {
+      DebugLogManager.logInfo('Sync deferred device download until phone queue drains', {
+        'newConversations': resp.newConversationIds.length,
+        'updatedConversations': resp.updatedConversationIds.length,
+      });
+      DebugLogManager.logEvent('sync_completed_phone_first', {
+        'newConversations': resp.newConversationIds.length,
+        'updatedConversations': resp.updatedConversationIds.length,
+      });
+      return resp;
+    }
+
+    // Phase 1: New multi-file storage sync (for new firmware with LittleFS)
+    // Refresh file list from device via BLE.
     await _storageSync.refreshWalsFromDevice();
     final storageMissing = await _storageSync.getMissingWals();
     if (storageMissing.isNotEmpty) {
-      Logger.debug("WalSyncs: Phase 0 - Downloading ${storageMissing.length} multi-file storage files to phone");
-      DebugLogManager.logInfo('Sync Phase 0: Multi-file storage sync');
+      Logger.debug("WalSyncs: Phase 1 - Downloading ${storageMissing.length} multi-file storage files to phone");
+      DebugLogManager.logInfo('Sync Phase 1: Multi-file storage sync');
       progress?.onWalSyncedProgress(0.0, phase: SyncPhase.downloadingFromDevice);
       await _storageSync.syncAll(progress: progress);
     }
@@ -203,9 +232,9 @@ class WalSyncs implements IWalSync {
       return resp;
     }
 
-    // Phase 1a: Download SD card data to phone (legacy firmware)
-    Logger.debug("WalSyncs: Phase 1a - Downloading SD card data to phone");
-    DebugLogManager.logInfo('Sync Phase 1a: Downloading SD card data to phone');
+    // Phase 2a: Download SD card data to phone (legacy firmware)
+    Logger.debug("WalSyncs: Phase 2a - Downloading SD card data to phone");
+    DebugLogManager.logInfo('Sync Phase 2a: Downloading SD card data to phone');
     progress?.onWalSyncedProgress(0.0, phase: SyncPhase.downloadingFromDevice);
     final missingSDCardWals = (await _sdcardSync.getMissingWals()).where((w) => w.status == WalStatus.miss).toList();
 
@@ -230,9 +259,9 @@ class WalSyncs implements IWalSync {
       return resp;
     }
 
-    // Phase 1b: Download flash page data to phone
-    Logger.debug("WalSyncs: Phase 1b - Downloading flash page data to phone");
-    DebugLogManager.logInfo('Sync Phase 1b: Downloading flash page data to phone');
+    // Phase 2b: Download flash page data to phone
+    Logger.debug("WalSyncs: Phase 2b - Downloading flash page data to phone");
+    DebugLogManager.logInfo('Sync Phase 2b: Downloading flash page data to phone');
     await _flashPageSync.syncAll(progress: progress);
 
     if (_isCancelled) {
@@ -254,21 +283,8 @@ class WalSyncs implements IWalSync {
       return resp;
     }
 
-    // Phase 2: Upload all phone files to cloud (includes SD card and flash page downloads)
-    Logger.debug("WalSyncs: Phase 2 - Uploading phone files to cloud");
-    DebugLogManager.logInfo('Sync Phase 2: Uploading phone files to cloud');
-    progress?.onWalSyncedProgress(0.0, phase: SyncPhase.uploadingToCloud);
-    var partialRes = await _phoneSync.syncAll(progress: progress);
-    if (partialRes != null) {
-      resp.newConversationIds.addAll(
-        partialRes.newConversationIds.where((id) => !resp.newConversationIds.contains(id)),
-      );
-      resp.updatedConversationIds.addAll(
-        partialRes.updatedConversationIds.where(
-          (id) => !resp.updatedConversationIds.contains(id) && !resp.newConversationIds.contains(id),
-        ),
-      );
-    }
+    // Phase 3: Upload files downloaded during this sync.
+    await _uploadPhoneFilesToCloud(resp, progress, logLabel: 'Sync Phase 3: Uploading downloaded phone files to cloud');
 
     DebugLogManager.logEvent('sync_completed', {
       'newConversations': resp.newConversationIds.length,
@@ -276,6 +292,32 @@ class WalSyncs implements IWalSync {
     });
 
     return resp;
+  }
+
+  Future<void> _uploadPhoneFilesToCloud(
+    SyncLocalFilesResponse resp,
+    IWalSyncProgressListener? progress, {
+    required String logLabel,
+  }) async {
+    Logger.debug("WalSyncs: $logLabel");
+    DebugLogManager.logInfo(logLabel);
+    progress?.onWalSyncedProgress(0.0, phase: SyncPhase.uploadingToCloud);
+    final partialResp = await _phoneSync.syncAll(progress: progress);
+    _mergeSyncResponse(resp, partialResp);
+    if (!identical(_accumulatedResponse, resp)) {
+      _mergeSyncResponse(_accumulatedResponse, partialResp);
+    }
+  }
+
+  void _mergeSyncResponse(SyncLocalFilesResponse? target, SyncLocalFilesResponse? source) {
+    if (target == null || source == null) return;
+
+    target.newConversationIds.addAll(source.newConversationIds.where((id) => !target.newConversationIds.contains(id)));
+    target.updatedConversationIds.addAll(
+      source.updatedConversationIds.where(
+        (id) => !target.updatedConversationIds.contains(id) && !target.newConversationIds.contains(id),
+      ),
+    );
   }
 
   @override
@@ -327,7 +369,12 @@ class WalSyncs implements IWalSync {
 
   /// Get conversation IDs accumulated so far from completed upload batches.
   /// Returns null if no sync is in progress or no batches have completed.
-  SyncLocalFilesResponse? get accumulatedResponse => _phoneSync.accumulatedResponse;
+  SyncLocalFilesResponse? get accumulatedResponse {
+    final phoneResponse = _phoneSync.accumulatedResponse;
+    if (_accumulatedResponse == null) return phoneResponse;
+    _mergeSyncResponse(_accumulatedResponse, phoneResponse);
+    return _accumulatedResponse;
+  }
 
   /// Wait for internet connectivity to be restored (e.g. after WiFi transfer).
   /// Polls every 2 seconds, gives up after 30 seconds.

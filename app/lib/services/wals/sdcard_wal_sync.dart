@@ -20,6 +20,8 @@ import 'package:omi/services/wals/wal_interfaces.dart';
 import 'package:omi/services/wifi/wifi_network_service.dart';
 
 class SDCardWalSyncImpl implements SDCardWalSync {
+  static const int _minimumStorageWalSeconds = 10;
+
   List<Wal> _wals = const [];
   BtDevice? _device;
 
@@ -195,8 +197,10 @@ class SDCardWalSyncImpl implements SDCardWalSync {
     }
 
     BleAudioCodec codec = await _getAudioCodec(deviceId);
-    if (totalBytes - storageOffset > 10 * codec.getFramesLengthInBytes() * codec.getFramesPerSecond()) {
-      var seconds = ((totalBytes - storageOffset) / codec.getFramesLengthInBytes()) ~/ codec.getFramesPerSecond();
+    final availableBytes = totalBytes - storageOffset;
+    final minimumBytes = _minimumStorageWalSeconds * codec.getFramesLengthInBytes() * codec.getFramesPerSecond();
+    if (availableBytes > minimumBytes) {
+      var seconds = (availableBytes / codec.getFramesLengthInBytes()) ~/ codec.getFramesPerSecond();
       // Use device-provided recording start timestamp if available (firmware >= 3.0.16), otherwise estimate
       int timerStart;
       if (_supportsTimestampMarkers() && storageFiles.length >= 3 && storageFiles[2] > 0) {
@@ -232,6 +236,15 @@ class SDCardWalSyncImpl implements SDCardWalSync {
           syncedFrameOffset: 0,
         ),
       );
+    } else if (availableBytes > 0) {
+      Logger.debug(
+        "SDCardWalSync: clearing short legacy storage tail (${availableBytes}B < ${minimumBytes}B)",
+      );
+      DebugLogManager.logInfo('SDCardWalSync: Clearing short legacy storage tail', {
+        'bytes': availableBytes,
+        'minSeconds': _minimumStorageWalSeconds,
+      });
+      await _writeToStorage(deviceId, 1, 1, 0);
     }
 
     return wals;
@@ -328,7 +341,7 @@ class SDCardWalSyncImpl implements SDCardWalSync {
     int fileNum = wal.fileNum;
     int offset = wal.storageOffset;
 
-    Logger.debug("_readStorageBytesToFileLegacy ${offset}");
+    Logger.debug("_readStorageBytesToFileLegacy $offset");
 
     List<List<int>> bytesData = [];
     var chunkSize = sdcardChunkSizeSecs * 100;
@@ -461,7 +474,7 @@ class SDCardWalSyncImpl implements SDCardWalSync {
     int offset = wal.storageOffset;
     int timerStart = wal.timerStart;
 
-    Logger.debug("_readStorageBytesToFileWithMarkers ${offset}");
+    Logger.debug("_readStorageBytesToFileWithMarkers $offset");
 
     List<List<int>> bytesData = [];
     var bytesLeft = 0;

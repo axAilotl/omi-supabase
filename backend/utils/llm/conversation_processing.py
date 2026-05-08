@@ -10,6 +10,7 @@ from models.calendar_context import CalendarMeetingContext
 from models.conversation import Conversation
 from models.conversation_photo import ConversationPhoto
 from models.structured import ActionItem, ActionItemsExtraction, Event, Structured
+from utils.sync_filters import should_skip_sync_transcript_text
 from .clients import get_llm, parser
 import logging
 
@@ -168,6 +169,9 @@ def should_discard_conversation(
 
     word_count = len(transcript.split()) if transcript and transcript.strip() else 0
     has_photos = photos and ConversationPhoto.photos_as_string(photos) != 'None'
+
+    if not has_photos and should_skip_sync_transcript_text(transcript or '', duration_seconds):
+        return True
 
     context_parts = []
     if transcript and transcript.strip():
