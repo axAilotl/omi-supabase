@@ -17,9 +17,12 @@
 #include "utils.h"
 // #include "nfc.h"
 #include "button.h"
+#include "features.h"
 #include "lib/battery/battery.h"
 #include "mic.h"
+#include "rtc.h"
 #include "sdcard.h"
+#include "settings.h"
 #include "speaker.h"
 #include "storage.h"
 // #include "friend.h"
@@ -38,7 +41,7 @@ uint16_t current_package_index = 0;
 // Internal
 //
 
-struct k_mutex write_sdcard_mutex;
+K_MUTEX_DEFINE(write_sdcard_mutex);
 
 static ssize_t audio_data_write_handler(struct bt_conn *conn,
                                         const struct bt_gatt_attr *attr,
@@ -59,6 +62,38 @@ static ssize_t audio_codec_read_characteristic(struct bt_conn *conn,
                                                void *buf,
                                                uint16_t len,
                                                uint16_t offset);
+static ssize_t settings_dim_ratio_read_handler(struct bt_conn *conn,
+                                               const struct bt_gatt_attr *attr,
+                                               void *buf,
+                                               uint16_t len,
+                                               uint16_t offset);
+static ssize_t settings_dim_ratio_write_handler(struct bt_conn *conn,
+                                                const struct bt_gatt_attr *attr,
+                                                const void *buf,
+                                                uint16_t len,
+                                                uint16_t offset,
+                                                uint8_t flags);
+static ssize_t settings_mic_gain_read_handler(struct bt_conn *conn,
+                                              const struct bt_gatt_attr *attr,
+                                              void *buf,
+                                              uint16_t len,
+                                              uint16_t offset);
+static ssize_t settings_mic_gain_write_handler(struct bt_conn *conn,
+                                               const struct bt_gatt_attr *attr,
+                                               const void *buf,
+                                               uint16_t len,
+                                               uint16_t offset,
+                                               uint8_t flags);
+static ssize_t
+features_read_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset);
+static ssize_t time_sync_write_handler(struct bt_conn *conn,
+                                       const struct bt_gatt_attr *attr,
+                                       const void *buf,
+                                       uint16_t len,
+                                       uint16_t offset,
+                                       uint8_t flags);
+static ssize_t
+time_sync_read_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset);
 
 static void dfu_ccc_config_changed_handler(const struct bt_gatt_attr *attr, uint16_t value);
 static ssize_t dfu_control_point_write_handler(struct bt_conn *conn,
@@ -114,6 +149,73 @@ static struct bt_gatt_attr audio_service_attr[] = {
 };
 
 static struct bt_gatt_service audio_service = BT_GATT_SERVICE(audio_service_attr);
+
+static struct bt_uuid_128 settings_service_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10010, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+static struct bt_uuid_128 settings_dim_ratio_characteristic_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10011, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+static struct bt_uuid_128 settings_mic_gain_characteristic_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10012, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+
+static struct bt_gatt_attr settings_service_attr[] = {
+    BT_GATT_PRIMARY_SERVICE(&settings_service_uuid),
+    BT_GATT_CHARACTERISTIC(&settings_dim_ratio_characteristic_uuid.uuid,
+                           BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+                           BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+                           settings_dim_ratio_read_handler,
+                           settings_dim_ratio_write_handler,
+                           NULL),
+    BT_GATT_CHARACTERISTIC(&settings_mic_gain_characteristic_uuid.uuid,
+                           BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+                           BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+                           settings_mic_gain_read_handler,
+                           settings_mic_gain_write_handler,
+                           NULL),
+};
+
+static struct bt_gatt_service settings_service = BT_GATT_SERVICE(settings_service_attr);
+
+static struct bt_uuid_128 features_service_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10020, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+static struct bt_uuid_128 features_characteristic_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10021, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+
+static struct bt_gatt_attr features_service_attr[] = {
+    BT_GATT_PRIMARY_SERVICE(&features_service_uuid),
+    BT_GATT_CHARACTERISTIC(&features_characteristic_uuid.uuid,
+                           BT_GATT_CHRC_READ,
+                           BT_GATT_PERM_READ,
+                           features_read_handler,
+                           NULL,
+                           NULL),
+};
+
+static struct bt_gatt_service features_service = BT_GATT_SERVICE(features_service_attr);
+
+static struct bt_uuid_128 time_sync_service_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10030, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+static struct bt_uuid_128 time_sync_write_characteristic_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10031, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+static struct bt_uuid_128 time_sync_read_characteristic_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10032, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+
+static struct bt_gatt_attr time_sync_service_attr[] = {
+    BT_GATT_PRIMARY_SERVICE(&time_sync_service_uuid),
+    BT_GATT_CHARACTERISTIC(&time_sync_write_characteristic_uuid.uuid,
+                           BT_GATT_CHRC_WRITE,
+                           BT_GATT_PERM_WRITE,
+                           NULL,
+                           time_sync_write_handler,
+                           NULL),
+    BT_GATT_CHARACTERISTIC(&time_sync_read_characteristic_uuid.uuid,
+                           BT_GATT_CHRC_READ,
+                           BT_GATT_PERM_READ,
+                           time_sync_read_handler,
+                           NULL,
+                           NULL),
+};
+
+static struct bt_gatt_service time_sync_service = BT_GATT_SERVICE(time_sync_service_attr);
 
 // Nordic Legacy DFU service with UUID 00001530-1212-EFDE-1523-785FEABCD123
 // exposes following characteristics:
@@ -326,6 +428,167 @@ static ssize_t audio_data_write_handler(struct bt_conn *conn,
     return len;
 }
 
+static ssize_t settings_dim_ratio_write_handler(struct bt_conn *conn,
+                                                const struct bt_gatt_attr *attr,
+                                                const void *buf,
+                                                uint16_t len,
+                                                uint16_t offset,
+                                                uint8_t flags)
+{
+    uint8_t new_ratio;
+    int err;
+
+    ARG_UNUSED(conn);
+    ARG_UNUSED(attr);
+    ARG_UNUSED(offset);
+    ARG_UNUSED(flags);
+
+    if (len != sizeof(new_ratio)) {
+        LOG_WRN("Invalid dim ratio write length: %u", len);
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    new_ratio = ((const uint8_t *) buf)[0];
+    if (new_ratio > 100) {
+        new_ratio = 100;
+    }
+
+    err = app_settings_save_dim_ratio(new_ratio);
+    if (err) {
+        LOG_ERR("Failed to save dim ratio setting: %d", err);
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
+
+    return len;
+}
+
+static ssize_t settings_dim_ratio_read_handler(struct bt_conn *conn,
+                                               const struct bt_gatt_attr *attr,
+                                               void *buf,
+                                               uint16_t len,
+                                               uint16_t offset)
+{
+    uint8_t current_ratio = app_settings_get_dim_ratio();
+
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, &current_ratio, sizeof(current_ratio));
+}
+
+static ssize_t settings_mic_gain_write_handler(struct bt_conn *conn,
+                                               const struct bt_gatt_attr *attr,
+                                               const void *buf,
+                                               uint16_t len,
+                                               uint16_t offset,
+                                               uint8_t flags)
+{
+    uint8_t new_gain;
+    int err;
+
+    ARG_UNUSED(conn);
+    ARG_UNUSED(attr);
+    ARG_UNUSED(offset);
+    ARG_UNUSED(flags);
+
+    if (len != sizeof(new_gain)) {
+        LOG_WRN("Invalid mic gain write length: %u", len);
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    new_gain = MIN(((const uint8_t *) buf)[0], 8);
+
+    err = app_settings_save_mic_gain(new_gain);
+    if (err) {
+        LOG_ERR("Failed to save mic gain setting: %d", err);
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
+
+    mic_set_gain(new_gain);
+
+    return len;
+}
+
+static ssize_t settings_mic_gain_read_handler(struct bt_conn *conn,
+                                              const struct bt_gatt_attr *attr,
+                                              void *buf,
+                                              uint16_t len,
+                                              uint16_t offset)
+{
+    uint8_t current_gain = app_settings_get_mic_gain();
+
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, &current_gain, sizeof(current_gain));
+}
+
+static uint32_t get_supported_features(void)
+{
+    uint32_t features = 0;
+
+#ifdef CONFIG_OMI_ENABLE_SPEAKER
+    features |= OMI_FEATURE_SPEAKER;
+#endif
+#ifdef CONFIG_OMI_ENABLE_BUTTON
+    features |= OMI_FEATURE_BUTTON;
+#endif
+#ifdef CONFIG_OMI_ENABLE_BATTERY
+    features |= OMI_FEATURE_BATTERY;
+#endif
+#ifdef CONFIG_OMI_ENABLE_HAPTIC
+    features |= OMI_FEATURE_HAPTIC;
+#endif
+#ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
+    features |= OMI_FEATURE_OFFLINE_STORAGE;
+#endif
+    features |= OMI_FEATURE_MIC_GAIN;
+
+    return features;
+}
+
+static ssize_t
+features_read_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
+{
+    uint32_t features = get_supported_features();
+
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, &features, sizeof(features));
+}
+
+static ssize_t time_sync_write_handler(struct bt_conn *conn,
+                                       const struct bt_gatt_attr *attr,
+                                       const void *buf,
+                                       uint16_t len,
+                                       uint16_t offset,
+                                       uint8_t flags)
+{
+    uint32_t epoch_s;
+    int err;
+
+    ARG_UNUSED(conn);
+    ARG_UNUSED(attr);
+    ARG_UNUSED(offset);
+    ARG_UNUSED(flags);
+
+    if (len != sizeof(epoch_s)) {
+        LOG_WRN("Invalid time sync write length: %u", len);
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    memcpy(&epoch_s, buf, sizeof(epoch_s));
+
+    err = rtc_set_utc_time((uint64_t) epoch_s);
+    if (err) {
+        LOG_ERR("Failed to set RTC time: %d", err);
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
+
+    LOG_INF("Time synchronized to %u", epoch_s);
+    return len;
+}
+
+static ssize_t
+time_sync_read_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
+{
+    uint32_t epoch_s = get_utc_time();
+
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, &epoch_s, sizeof(epoch_s));
+}
+
 //
 // DFU Service Handlers
 //
@@ -400,6 +663,7 @@ void broadcast_battery_level(struct k_work *work_item)
 static void _transport_connected(struct bt_conn *conn, uint8_t err)
 {
     struct bt_conn_info info = {0};
+    const struct bt_le_conn_param *fast_conn_param = BT_LE_CONN_PARAM(6, 12, 0, 400);
     storage_is_on = true;
 
     err = bt_conn_get_info(conn, &info);
@@ -415,15 +679,30 @@ static void _transport_connected(struct bt_conn *conn, uint8_t err)
         bt_conn_unref(current_connection);
     }
     current_connection = bt_conn_ref(conn);
-    current_mtu = info.le.data_len->tx_max_len;
+    current_mtu = bt_gatt_get_mtu(conn);
     LOG_INF("Transport connected");
     LOG_DBG("Interval: %d, latency: %d, timeout: %d", info.le.interval, info.le.latency, info.le.timeout);
-    LOG_DBG("TX PHY %s, RX PHY %s", phy2str(info.le.phy->tx_phy), phy2str(info.le.phy->rx_phy));
+    LOG_DBG("TX PHY %u, RX PHY %u", info.le.phy->tx_phy, info.le.phy->rx_phy);
     LOG_DBG("LE data len updated: TX (len: %d time: %d) RX (len: %d time: %d)",
             info.le.data_len->tx_max_len,
             info.le.data_len->tx_max_time,
             info.le.data_len->rx_max_len,
             info.le.data_len->rx_max_time);
+
+    int rc = bt_conn_le_param_update(conn, fast_conn_param);
+    if (rc) {
+        LOG_WRN("Failed to request fast BLE connection interval (err %d)", rc);
+    }
+
+    rc = bt_conn_le_phy_update(conn, BT_CONN_LE_PHY_PARAM_2M);
+    if (rc) {
+        LOG_WRN("Failed to request BLE 2M PHY (err %d)", rc);
+    }
+
+    rc = bt_conn_le_data_len_update(conn, BT_LE_DATA_LEN_PARAM_MAX);
+    if (rc) {
+        LOG_WRN("Failed to request max BLE data length (err %d)", rc);
+    }
 
     k_work_schedule(&battery_work, K_MSEC(100)); // run immediately
 
@@ -457,6 +736,7 @@ static void _le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t 
 {
     LOG_INF("Connection parameters updated.");
     LOG_DBG("[ interval: %d, latency: %d, timeout: %d ]", interval, latency, timeout);
+    current_mtu = bt_gatt_get_mtu(conn);
 }
 
 static void _le_phy_updated(struct bt_conn *conn, struct bt_conn_le_phy_info *param)
@@ -473,7 +753,7 @@ static void _le_data_length_updated(struct bt_conn *conn, struct bt_conn_le_data
             info->tx_max_time,
             info->rx_max_len,
             info->rx_max_time);
-    current_mtu = info->tx_max_len;
+    current_mtu = bt_gatt_get_mtu(conn);
 }
 
 static struct bt_conn_cb _callback_references = {
@@ -810,8 +1090,6 @@ int bt_on()
 // periodic advertising
 int transport_start()
 {
-    k_mutex_init(&write_sdcard_mutex);
-
     // Configure callbacks
     bt_conn_cb_register(&_callback_references);
 
@@ -836,6 +1114,9 @@ int transport_start()
     memset(storage_temp_data, 0, OPUS_PADDED_LENGTH * 4);
     bt_gatt_service_register(&storage_service);
     bt_gatt_service_register(&audio_service);
+    bt_gatt_service_register(&settings_service);
+    bt_gatt_service_register(&features_service);
+    bt_gatt_service_register(&time_sync_service);
     bt_gatt_service_register(&dfu_service);
     err = bt_le_adv_start(BT_LE_ADV_CONN, bt_ad, ARRAY_SIZE(bt_ad), bt_sd, ARRAY_SIZE(bt_sd));
     if (err) {

@@ -1,5 +1,6 @@
 #include "sdcard.h"
 
+#include <errno.h>
 #include <ff.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
@@ -36,6 +37,8 @@ uint32_t file_num_array[2];
 static const char *disk_mount_pt = "/SD:/";
 
 bool sd_enabled = false;
+
+static int get_file_contents(struct fs_dir_t *zdp, struct fs_dirent *entry);
 
 int mount_sd_card(void)
 {
@@ -90,7 +93,7 @@ int mount_sd_card(void)
     fs_dir_t_init(&audio_dir_entry);
     err = fs_opendir(&audio_dir_entry, "/SD:/audio");
     if (err) {
-        LOG_ERR("error while opening directory ", err);
+        LOG_ERR("error while opening directory: %d", err);
         return -1;
     }
     LOG_INF("result of opendir: %d", err);
@@ -141,7 +144,7 @@ uint32_t get_file_size(uint8_t num)
     snprintf(current_full_path, sizeof(current_full_path), "%s%s", disk_mount_pt, ptr);
     k_free(ptr);
     struct fs_dirent entry;
-    int res = fs_stat(&current_full_path, &entry);
+    int res = fs_stat(current_full_path, &entry);
     if (res) {
         LOG_ERR("invalid file in get file size\n");
         return 0;
@@ -155,7 +158,7 @@ int move_read_pointer(uint8_t num)
     snprintf(read_buffer, sizeof(read_buffer), "%s%s", disk_mount_pt, read_ptr);
     k_free(read_ptr);
     struct fs_dirent entry;
-    int res = fs_stat(&read_buffer, &entry);
+    int res = fs_stat(read_buffer, &entry);
     if (res) {
         LOG_ERR("invalid file in move read ptr\n");
         return -1;
@@ -169,7 +172,7 @@ int move_write_pointer(uint8_t num)
     snprintf(write_buffer, sizeof(write_buffer), "%s%s", disk_mount_pt, write_ptr);
     k_free(write_ptr);
     struct fs_dirent entry;
-    int res = fs_stat(&write_buffer, &entry);
+    int res = fs_stat(write_buffer, &entry);
     if (res) {
         LOG_ERR("invalid file in move write pointer\n");
         return -1;
@@ -212,6 +215,50 @@ int read_audio_data(uint8_t *buf, int amount, int offset)
     return rc;
 }
 
+int read_audio_data_bulk(uint8_t *buf, int buf_size, int amount, int offset, audio_data_sink_t sink, void *ctx)
+{
+    if (buf == NULL || buf_size <= 0 || amount < 0 || sink == NULL) {
+        return -EINVAL;
+    }
+
+    struct fs_file_t read_file;
+    fs_file_t_init(&read_file);
+
+    int rc = fs_open(&read_file, read_buffer, FS_O_READ | FS_O_RDWR);
+    if (rc < 0) {
+        return rc;
+    }
+
+    rc = fs_seek(&read_file, offset, FS_SEEK_SET);
+    if (rc < 0) {
+        fs_close(&read_file);
+        return rc;
+    }
+
+    int delivered = 0;
+    while (delivered < amount) {
+        int to_read = MIN(buf_size, amount - delivered);
+        rc = fs_read(&read_file, buf, to_read);
+        if (rc <= 0) {
+            break;
+        }
+
+        int sink_rc = sink(buf, rc, ctx);
+        if (sink_rc != rc) {
+            fs_close(&read_file);
+            return sink_rc < 0 ? sink_rc : -EIO;
+        }
+
+        delivered += rc;
+        if (rc < to_read) {
+            break;
+        }
+    }
+
+    fs_close(&read_file);
+    return delivered;
+}
+
 int write_to_file(uint8_t *data, uint32_t length)
 {
     struct fs_file_t write_file;
@@ -229,9 +276,10 @@ int initialize_audio_file(uint8_t num)
     if (header == NULL) {
         return -1;
     }
+
+    int err = create_file(header);
     k_free(header);
-    create_file(header);
-    return 0;
+    return err;
 }
 
 char *generate_new_audio_header(uint8_t num)
@@ -257,7 +305,7 @@ char *generate_new_audio_header(uint8_t num)
     return ptr_;
 }
 
-int get_file_contents(struct fs_dir_t *zdp, struct fs_dirent *entry)
+static int get_file_contents(struct fs_dir_t *zdp, struct fs_dirent *entry)
 {
     if (zdp->mp->fs->readdir(zdp, entry)) {
         return -1;

@@ -6,8 +6,11 @@
 #include "codec.h"
 #include "config.h"
 #include "led.h"
+#include "lib/battery/battery.h"
 #include "mic.h"
+#include "rtc.h"
 #include "sdcard.h"
+#include "settings.h"
 #include "speaker.h"
 #include "storage.h"
 #include "transport.h"
@@ -172,6 +175,13 @@ int main(void)
     if (err) {
         LOG_WRN("Watchdog init failed (err %d), continuing without watchdog", err);
     }
+
+    err = app_settings_init();
+    if (err) {
+        LOG_ERR("Settings init failed (err %d)", err);
+        return err;
+    }
+    init_rtc();
 
     // Enable battery
 #ifdef CONFIG_OMI_ENABLE_BATTERY

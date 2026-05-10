@@ -2,7 +2,7 @@
 #define TRANSPORT_H
 
 #include <zephyr/drivers/sensor.h>
-typedef struct sensors {
+struct sensors {
 
     struct sensor_value a_x;
     struct sensor_value a_y;

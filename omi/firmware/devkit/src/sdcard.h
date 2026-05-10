@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+typedef int (*audio_data_sink_t)(const uint8_t *data, int length, void *ctx);
+
 /**
  * @brief Mount the SD Card. Initializes the audio files
  *
@@ -51,6 +53,16 @@ int write_to_file(uint8_t *data, uint32_t length);
  * @return number of bytes read
  */
 int read_audio_data(uint8_t *buf, int amount, int offset);
+
+/**
+ * @brief Stream from the current audio file through a caller-provided sink
+ *
+ * Opens and seeks the audio file once, then reads in buf-sized chunks until
+ * amount bytes have been delivered or the file ends.
+ *
+ * @return number of bytes read and delivered, or a negative errno code
+ */
+int read_audio_data_bulk(uint8_t *buf, int buf_size, int amount, int offset, audio_data_sink_t sink, void *ctx);
 /**
  * @brief Get the size of the specified audio file number
  *

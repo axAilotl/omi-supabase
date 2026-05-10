@@ -1,8 +1,42 @@
 #!/bin/bash
 set -e
 
+ensure_python_tools() {
+    local venv_dir="/tmp/firmware-build-venv"
+    local need_install=0
+
+    if python3 -m venv "$venv_dir"; then
+        export PATH="$venv_dir/bin:$PATH"
+
+        if [ ! -x "$venv_dir/bin/west" ] || [ ! -x "$venv_dir/bin/adafruit-nrfutil" ]; then
+            need_install=1
+        fi
+
+        if ! "$venv_dir/bin/python3" -c "import elftools" >/dev/null 2>&1; then
+            need_install=1
+        fi
+
+        if [ "$need_install" -eq 1 ]; then
+            echo "Installing west, adafruit-nrfutil, and pyelftools in an isolated virtualenv..."
+            "$venv_dir/bin/pip" install --upgrade pip >/dev/null
+            "$venv_dir/bin/pip" install west adafruit-nrfutil pyelftools
+        fi
+        return 0
+    fi
+
+    echo "python3 -m venv is unavailable, falling back to pip --break-system-packages..."
+    pip install --user --break-system-packages west adafruit-nrfutil pyelftools
+    export PATH="/root/.local/bin:$PATH"
+}
+
 # Set up working directory
 cd /omi/firmware/
+
+ensure_python_tools
+
+export ZEPHYR_TOOLCHAIN_VARIANT="cross-compile"
+export CROSS_COMPILE="/opt/toolchains/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-"
+unset ZEPHYR_SDK_INSTALL_DIR
 
 # Initialize west with nRF Connect SDK if not already initialized
 echo "Checking west initialization status..."

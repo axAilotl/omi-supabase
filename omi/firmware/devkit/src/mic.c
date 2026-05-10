@@ -1,5 +1,6 @@
 #include "mic.h"
 
+#include <hal/nrf_pdm.h>
 #include <haly/nrfy_gpio.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
@@ -10,6 +11,7 @@
 #include "led.h"
 #include "nrfx_clock.h"
 #include "nrfx_pdm.h"
+#include "settings.h"
 #include "utils.h"
 
 LOG_MODULE_REGISTER(mic, CONFIG_LOG_DEFAULT_LEVEL);
@@ -22,6 +24,28 @@ static int16_t _buffer_0[MIC_BUFFER_SAMPLES];
 static int16_t _buffer_1[MIC_BUFFER_SAMPLES];
 static volatile uint8_t _next_buffer_index = 0;
 static volatile mix_handler _callback = NULL;
+static bool _pdm_initialized = false;
+
+static uint8_t mic_gain_level_to_hw_gain(uint8_t gain_level)
+{
+    static const uint8_t gain_map[9] = {
+        0x00,     // Level 0: mute
+        0x14,     // Level 1: -20dB
+        0x1E,     // Level 2: -10dB
+        0x28,     // Level 3: +0dB
+        0x2E,     // Level 4: +6dB
+        0x32,     // Level 5: +10dB
+        MIC_GAIN, // Level 6: preserve DK2's historical default gain
+        0x46,     // Level 7: +30dB
+        0x50,     // Level 8: +40dB
+    };
+
+    if (gain_level > 8) {
+        gain_level = 8;
+    }
+
+    return gain_map[gain_level];
+}
 
 static void pdm_irq_handler(nrfx_pdm_evt_t const *event)
 {
@@ -54,6 +78,7 @@ static void pdm_irq_handler(nrfx_pdm_evt_t const *event)
 
 int mic_start()
 {
+    uint8_t saved_gain = app_settings_get_mic_gain();
 
     // Start the high frequency clock
     if (!nrf_clock_hf_is_running(NRF_CLOCK, NRF_CLOCK_HFCLK_HIGH_ACCURACY)) {
@@ -62,8 +87,8 @@ int mic_start()
 
     // Configure PDM
     nrfx_pdm_config_t pdm_config = NRFX_PDM_DEFAULT_CONFIG(PDM_CLK_PIN, PDM_DIN_PIN);
-    pdm_config.gain_l = MIC_GAIN;
-    pdm_config.gain_r = MIC_GAIN;
+    pdm_config.gain_l = mic_gain_level_to_hw_gain(saved_gain);
+    pdm_config.gain_r = mic_gain_level_to_hw_gain(saved_gain);
     pdm_config.interrupt_priority = MIC_IRC_PRIORITY;
     pdm_config.clock_freq = NRF_PDM_FREQ_1280K;
     pdm_config.mode = NRF_PDM_MODE_MONO;
@@ -74,6 +99,7 @@ int mic_start()
         LOG_ERR("Audio unable to initialize PDM");
         return -1;
     }
+    _pdm_initialized = true;
 
     // Power on Mic
     nrfy_gpio_cfg_output(PDM_PWR_PIN);
@@ -102,4 +128,25 @@ void mic_off()
 void mic_on()
 {
     nrfy_gpio_pin_set(PDM_PWR_PIN);
+}
+
+void mic_set_gain(uint8_t gain_level)
+{
+    uint8_t clamped_gain = MIN(gain_level, 8);
+    uint8_t hw_gain = mic_gain_level_to_hw_gain(clamped_gain);
+
+    LOG_INF("Setting mic gain to level %u (0x%02x)", clamped_gain, hw_gain);
+
+    if (!_pdm_initialized) {
+        LOG_INF("PDM not initialized yet, gain will be applied on mic_start");
+        return;
+    }
+
+#ifdef NRF_PDM0_S
+    nrf_pdm_gain_set(NRF_PDM0_S, hw_gain, hw_gain);
+#elif defined(NRF_PDM0_NS)
+    nrf_pdm_gain_set(NRF_PDM0_NS, hw_gain, hw_gain);
+#else
+    nrf_pdm_gain_set(NRF_PDM0, hw_gain, hw_gain);
+#endif
 }

@@ -58,10 +58,11 @@ echo -e "${YELLOW}This might take a while the first time.${NC}"
 docker run --rm -it $PLATFORM_FLAG \
     -v "$REPO_ROOT:/omi" \
     -e CMAKE_PREFIX_PATH=/opt/toolchains \
+    -e ZEPHYR_TOOLCHAIN_VARIANT=cross-compile \
+    -e CROSS_COMPILE=/opt/toolchains/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi- \
     -e PATH="/root/.local/bin:$PATH" \
     ghcr.io/zephyrproject-rtos/ci \
-    bash -c "pip install --user adafruit-nrfutil && \
-             /omi/firmware/scripts/build-firmware-in-docker.sh"
+    bash -c "/omi/firmware/scripts/build-firmware-in-docker.sh"
 
 # Check if the build was successful
 if [ -d "$REPO_ROOT/firmware/build/docker_build" ] && [ "$(ls -A "$REPO_ROOT/firmware/build/docker_build")" ]; then

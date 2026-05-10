@@ -49,6 +49,12 @@
     status = "disabled";
 };
 
+&zephyr_udc0 {
+    cdc_acm_uart0: cdc_acm_uart0 {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};
+
 &qspi {
 	status = "okay";
 	pinctrl-0 = <&qspi_default>;
@@ -90,4 +96,3 @@
 &temp {
     status = "disabled";
 };
-
