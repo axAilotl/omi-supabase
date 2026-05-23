@@ -22,6 +22,7 @@ Complete index of all documentation in the Omi codebase.
 ### Protocol & Integration
 
 - [Protocol](doc/developer/Protocol.mdx) - BLE protocol specification
+- [Android Background Transcription](doc/developer/AndroidBackgroundTranscription.mdx) - Android companion-device background transcription design and verification
 - [Cursor Configuration](doc/developer/Cursor.mdx) - How `.cursor/` configures rules, skills, and agents
 - [MCP](doc/developer/MCP.mdx) - Model Context Protocol server
 - [Contribution](doc/developer/Contribution.mdx) - How to contribute

@@ -64,6 +64,7 @@
                 "pages": [
                   "doc/developer/savingaudio",
                   "doc/developer/AudioStreaming",
+                  "doc/developer/AndroidBackgroundTranscription",
                   "doc/developer/DevKit2Testing"
                 ],
                 "icon": "headphones"

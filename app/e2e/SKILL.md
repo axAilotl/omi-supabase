@@ -270,6 +270,10 @@ cd app && bash setup.sh ios
 
 **Important:** Both platforms require completing the real sign-in and onboarding flows. Never bypass auth or onboarding — these are user-facing flows that must work correctly.
 
+### Android background transcription checks
+
+Android companion-device background transcription must be verified on physical Android 13, 14, and 15 phones with real Omi hardware. Use the matrix in `docs/doc/developer/AndroidBackgroundTranscription.mdx` for locked-phone, app-closed, recent-app swipe, Bluetooth toggle, network recovery, notification action, and app-reopen coverage. Treat Android force-stop as a platform limitation: after `adb shell am force-stop com.friend.ios.dev`, companion callbacks must not be expected to restart the app until the user launches it again.
+
 ## YAML Flow Schema (v2)
 
 Each flow file uses schema v2:
