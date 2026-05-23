@@ -17,7 +17,7 @@ This page documents the target design for Android companion-device background tr
 | Audio-to-WebSocket session | `app/lib/providers/capture_provider.dart` |
 | UI state contract | `app/lib/services/background_capture/background_capture_state.dart` |
 
-The runtime work is not complete yet. Today, `CaptureProvider` still owns the live audio-to-WebSocket path, `MainActivity.onDestroy()` stops `OmiBleForegroundService` when the activity is finishing, and `BleCompanionService` only starts BLE work while `OmiBleManager.isFlutterAlive` is true. Those are the blockers to remove before recent-app swipe or process death can keep transcription alive.
+This branch removes the native lifecycle blockers: `MainActivity.onDestroy()` no longer stops `OmiBleForegroundService`, companion callbacks can restore native BLE while Flutter is gone, and pause/stop intent is persisted outside the activity. The remaining product work is wiring the background capture runtime into the live audio-to-WebSocket path that `CaptureProvider` owns today.
 
 ## Target Design
 
@@ -97,8 +97,9 @@ Current BLE notification behavior is implemented in `OmiBleForegroundService`:
 | Channel name | `Omi BLE Connection` |
 | Notification ID | `2001` |
 | Importance | low |
-| Content | `Connecting to Omi...`, `Connected to Omi`, `Reconnecting...`, `Bluetooth is off`, or `Disconnected` |
+| Content | `Connecting to Omi...`, `Connected to Omi`, `Reconnecting...`, `Bluetooth is off`, `Paused`, `Stopped`, or `Disconnected` |
 | Tap behavior | Opens the app via the package launch intent |
+| Actions | `Pause`/`Resume`, plus `Stop` |
 
 The background transcription notification should stay ongoing while state is `starting`, `connecting`, `connected`, `recording`, `paused`, `buffering`, `reconnecting`, or `error`. Stop must transition to `userStopped`. Pause/resume actions, if present, must transition through `paused` and back to `recording` without losing the active conversation or WAL.
 
@@ -124,7 +125,7 @@ adb shell dumpsys notification --noredact | rg "Omi|omi_ble_channel|2001"
 | Baseline recording | Device connects, state reaches `recording`, foreground notification is visible, transcript segments arrive. | Screenshot, logcat service creation, transcript update. |
 | Phone locked | Lock the phone for at least 10 minutes. State remains `recording` or briefly `buffering`/`reconnecting`, then returns to `recording`; no duplicate conversation is created. | Lock-window timestamps in logcat, transcript continuity. |
 | App UI closed with Home/back | Activity leaves foreground but capture continues. Reopening app shows current `BackgroundCaptureState`. | `dumpsys activity services`, app screenshot after reopen. |
-| Recent-app swipe | Target behavior: capture continues and does not become `userStopped`. Current code stops the service until `MainActivity.onDestroy()` is fixed. | Logcat around swipe and service state after 60 seconds. |
+| Recent-app swipe | Native BLE service remains alive and does not become `userStopped`. Once the runtime is wired into production capture, transcription should continue through the swipe. | Logcat around swipe and service state after 60 seconds. |
 | Bluetooth off/on | Turning Bluetooth off transitions to `reconnecting` or `error` with a Bluetooth reason; turning it back on reconnects and returns to `recording`. | Logcat `Bluetooth off` / `Bluetooth on`, transcript resumes. |
 | Network loss/recovery | Airplane mode or Wi-Fi/mobile data loss transitions to `buffering` or `reconnecting`; restoring network drains buffered audio and resumes upload. | Buffered byte count, WAL upload logs, transcript catches up. |
 | Notification actions | Pause keeps the service alive and sets `paused`; resume returns to `recording`; stop sets `userStopped` and prevents companion auto-restart. | Notification screenshot, state payload, no service restart after stop. |
