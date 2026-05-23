@@ -85,11 +85,9 @@ class MainActivity: FlutterActivity() {
     }
 
     override fun onDestroy() {
-        // When user closes the app (swipe away), stop the foreground service.
-        // The service handles disconnecting all managed devices in onDestroy.
         if (isFinishing) {
             OmiBleManager.isFlutterAlive = false
-            OmiBleForegroundService.stopService(this)
+            OmiBleManager.instance.flutterApi = null
         }
         super.onDestroy()
     }

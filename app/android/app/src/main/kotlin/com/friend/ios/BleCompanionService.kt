@@ -4,7 +4,6 @@ import android.companion.AssociationInfo
 import android.companion.CompanionDeviceManager
 import android.companion.CompanionDeviceService
 import android.companion.DevicePresenceEvent
-import android.content.Context
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -14,9 +13,9 @@ import java.util.Locale
  * CompanionDeviceService that receives device appear/disappear events from the OS,
  * even when the app is not running.
  *
- * Omi streams audio via WebSocket which requires the Flutter app. So this service
- * only acts when the app is alive (isFlutterAlive). If the app is dead, starting
- * the foreground service is pointless — there's no WebSocket to stream audio to.
+ * Presence is allowed to restore the native BLE foreground service without a
+ * Flutter engine. User pause/stop intent is persisted separately and suppresses
+ * companion auto-start until the user reconnects or resumes.
  */
 class BleCompanionService : CompanionDeviceService() {
 
@@ -38,28 +37,19 @@ class BleCompanionService : CompanionDeviceService() {
         return cdm.myAssociations.find { it.id == assocId }
     }
 
-    /**
-     * Check if the Flutter app is alive. Set true in MainActivity.configureFlutterEngine,
-     * set false in MainActivity.onDestroy(isFinishing). Without Flutter, there's no
-     * WebSocket to stream audio to — BLE connection is useless.
-     */
-    private fun isAppAlive(): Boolean {
-        return OmiBleManager.isFlutterAlive
-    }
-
     private fun handleDeviceAppeared(address: String) {
         Log.i(TAG, "Device appeared: $address")
 
-        if (!isAppAlive() || !hasBluetoothPermission()) return
+        if (!hasBluetoothPermission()) return
+        if (OmiBleLifecycleStore.companionAutoStartSuppressed(applicationContext)) {
+            Log.i(TAG, "Device appeared but user intent suppresses companion auto-start")
+            return
+        }
 
-        val prefs = applicationContext.getSharedPreferences("ble_config", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("user_disconnected", false)) return
-
-        val saved = prefs.getString("managed_device", null)
-        val requiresBond = if (saved != null) {
-            val parts = saved.split("|")
-            parts.size == 2 && parts[0].equals(address, ignoreCase = true) && parts[1].toBoolean()
-        } else false
+        val saved = OmiBleLifecycleStore.managedDevice(applicationContext)
+        val requiresBond = saved?.takeIf {
+            it.address.equals(address, ignoreCase = true)
+        }?.requiresBond ?: false
 
         OmiBleForegroundService.startService(
             applicationContext, address,
@@ -78,18 +68,16 @@ class BleCompanionService : CompanionDeviceService() {
         super.onCreate()
         Log.i(TAG, "onCreate")
 
-        if (!isAppAlive() || !hasBluetoothPermission()) return
+        if (!hasBluetoothPermission()) return
+        if (OmiBleLifecycleStore.companionAutoStartSuppressed(applicationContext)) {
+            Log.i(TAG, "onCreate fallback suppressed by user intent")
+            return
+        }
 
-        val prefs = applicationContext.getSharedPreferences("ble_config", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("user_disconnected", false)) return
-
-        val saved = prefs.getString("managed_device", null) ?: return
-        val parts = saved.split("|")
-        if (parts.size != 2) return
-
+        val saved = OmiBleLifecycleStore.managedDevice(applicationContext) ?: return
         OmiBleForegroundService.startService(
-            applicationContext, parts[0],
-            requiresBond = parts[1].toBoolean(),
+            applicationContext, saved.address,
+            requiresBond = saved.requiresBond,
             caller = "CompanionSvc.onCreateFallback"
         )
     }

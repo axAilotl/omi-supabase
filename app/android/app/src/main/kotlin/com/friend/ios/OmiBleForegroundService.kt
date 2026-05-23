@@ -36,9 +36,6 @@ class OmiBleForegroundService : Service() {
         private const val STABILITY_TIMER_MS = 60_000L
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val COMPANION_RATE_LIMIT_MS = 15_000L
-        private const val PREFS_NAME = "ble_config"
-        private const val PREFS_KEY = "managed_device"
-        private const val PREFS_USER_DISCONNECTED = "user_disconnected"
         private const val DFU_SERVICE_UUID = "00001530-1212-efde-1523-785feabcd123"
         private const val PREFS_DIAGNOSTICS = "ble_diagnostics"
         private const val KEY_DISCONNECT_HISTORY = "disconnect_history"
@@ -47,6 +44,13 @@ class OmiBleForegroundService : Service() {
         private const val MAX_DISCONNECT_HISTORY = 20
         private const val RSSI_TREND_WINDOW_MS = 15_000L
         private const val RSSI_TREND_FADING_DROP_DB = 10
+        private const val ACTION_MANAGE = "com.friend.ios.omi_ble.action.MANAGE"
+        private const val ACTION_PAUSE = "com.friend.ios.omi_ble.action.PAUSE"
+        private const val ACTION_RESUME = "com.friend.ios.omi_ble.action.RESUME"
+        private const val ACTION_STOP = "com.friend.ios.omi_ble.action.STOP"
+        private const val EXTRA_DEVICE_ADDRESS = "device_address"
+        private const val EXTRA_REQUIRES_BOND = "requires_bond"
+        private const val EXTRA_CALLER = "caller"
 
         /** Classify the RSSI trajectory in the window before [nowMs]. See BleDisconnectEvent.rssiTrend
          *  for the semantics of each label. */
@@ -73,7 +77,13 @@ class OmiBleForegroundService : Service() {
         fun isActive(): Boolean = instance != null
 
         fun startService(context: Context, deviceAddress: String, requiresBond: Boolean = false, caller: String = "unknown") {
-            if (caller.startsWith("CompanionSvc")) {
+            val isCompanionRequest = caller.startsWith("CompanionSvc")
+            if (isCompanionRequest) {
+                if (OmiBleLifecycleStore.companionAutoStartSuppressed(context)) {
+                    Log.i(TAG, "startService($caller): suppressed by user intent")
+                    return
+                }
+
                 val now = System.currentTimeMillis()
                 if (now - lastCompanionRequestTimestamp < COMPANION_RATE_LIMIT_MS) {
                     Log.d(TAG, "startService($caller): rate-limited, skipping")
@@ -91,9 +101,10 @@ class OmiBleForegroundService : Service() {
 
             Log.d(TAG, "startService($caller): address=$deviceAddress, requiresBond=$requiresBond")
             val intent = Intent(context, OmiBleForegroundService::class.java).apply {
-                putExtra("device_address", deviceAddress)
-                putExtra("requires_bond", requiresBond)
-                putExtra("caller", caller)
+                setAction(ACTION_MANAGE)
+                putExtra(EXTRA_DEVICE_ADDRESS, deviceAddress)
+                putExtra(EXTRA_REQUIRES_BOND, requiresBond)
+                putExtra(EXTRA_CALLER, caller)
             }
             try {
                 ContextCompat.startForegroundService(context, intent)
@@ -102,11 +113,38 @@ class OmiBleForegroundService : Service() {
             }
         }
 
+        fun pauseService(context: Context) {
+            startAction(context, ACTION_PAUSE)
+        }
+
+        fun resumeService(context: Context) {
+            startAction(context, ACTION_RESUME)
+        }
+
+        fun stopAndSuppressAutoStart(context: Context) {
+            startAction(context, ACTION_STOP)
+        }
+
         fun stopService(context: Context) {
             try {
                 context.stopService(Intent(context, OmiBleForegroundService::class.java))
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to stop service", e)
+            }
+        }
+
+        fun getLifecycleSnapshot(context: Context): OmiBleLifecycleSnapshot {
+            return OmiBleLifecycleStore.snapshot(context)
+        }
+
+        private fun startAction(context: Context, actionName: String) {
+            val intent = Intent(context, OmiBleForegroundService::class.java).apply {
+                setAction(actionName)
+            }
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to send service action $actionName", e)
             }
         }
     }
@@ -147,6 +185,16 @@ class OmiBleForegroundService : Service() {
             val addr = address.uppercase()
             val managed = managedDevices[addr] ?: return
 
+            val lifecycleSnapshot = OmiBleLifecycleStore.snapshot(applicationContext)
+            if (lifecycleSnapshot.companionAutoStartSuppressed) {
+                Log.i(TAG, "onGattConnected while user state=${lifecycleSnapshot.userState}; closing $addr")
+                bleManager.disconnectGatt(addr)
+                bleManager.closeGatt(addr)
+                managed.currentGattHash = null
+                updateNotification(if (lifecycleSnapshot.userPaused) "Paused" else "Stopped")
+                return
+            }
+
             Log.i(TAG, "onGattConnected: $addr")
             if (managed.hasEverConnected) {
                 incrementReconnectionCount(addr)
@@ -174,6 +222,11 @@ class OmiBleForegroundService : Service() {
         override fun onGattServicesDiscovered(address: String, services: List<BleService>) {
             val addr = address.uppercase()
             val managed = managedDevices[addr] ?: return
+
+            if (OmiBleLifecycleStore.companionAutoStartSuppressed(applicationContext)) {
+                Log.i(TAG, "Ignoring services for $addr while user auto-start is suppressed")
+                return
+            }
 
             Log.i(TAG, "onGattServicesDiscovered: $addr (${services.size} services)")
 
@@ -248,10 +301,7 @@ class OmiBleForegroundService : Service() {
         val addr = address.uppercase()
         Log.i(TAG, "manageDevice: $addr (requiresBond=$requiresBond)")
 
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-            .putString(PREFS_KEY, "$addr|$requiresBond")
-            .putBoolean(PREFS_USER_DISCONNECTED, false)
-            .apply()
+        OmiBleLifecycleStore.saveManagedDevice(applicationContext, addr, requiresBond)
 
         if (!isBluetoothEnabled) {
             managedDevices[addr] = ManagedDevice(address = addr, requiresBond = requiresBond)
@@ -276,19 +326,24 @@ class OmiBleForegroundService : Service() {
 
     fun unmanageDevice(address: String) {
         val addr = address.uppercase()
-        val managed = managedDevices.remove(addr) ?: return
+        val managed = managedDevices.remove(addr)
 
         Log.i(TAG, "unmanageDevice: $addr")
+
+        OmiBleLifecycleStore.markUserDisconnected(applicationContext)
+
+        if (managed == null) {
+            bleManager.disconnectGatt(addr)
+            bleManager.closeGatt(addr)
+            stopSelf()
+            return
+        }
 
         managed.pendingReconnect?.let { handler.removeCallbacks(it) }
         managed.stabilityTimerRunnable?.let { handler.removeCallbacks(it) }
 
         bleManager.disconnectGatt(addr)
         bleManager.closeGatt(addr)
-
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-            .putBoolean(PREFS_USER_DISCONNECTED, true)
-            .apply()
 
         persistDisconnectEvent(addr, 0, isManual = true, eventType = "disconnect")
 
@@ -297,6 +352,113 @@ class OmiBleForegroundService : Service() {
         }
 
         stopSelf()
+    }
+
+    fun pauseFromUser() {
+        val wasPaused = OmiBleLifecycleStore.snapshot(applicationContext).userPaused
+        Log.i(TAG, "pauseFromUser")
+        OmiBleLifecycleStore.markUserPaused(applicationContext)
+
+        for ((addr, managed) in managedDevices) {
+            disconnectManagedDeviceForUser(
+                addr = addr,
+                managed = managed,
+                reason = "paused",
+                recordManualEvent = !wasPaused
+            )
+        }
+
+        updateNotification("Paused")
+    }
+
+    fun resumeFromUser() {
+        Log.i(TAG, "resumeFromUser")
+        OmiBleLifecycleStore.markUserResumed(applicationContext)
+
+        val saved = OmiBleLifecycleStore.managedDevice(applicationContext)
+        if (saved != null) {
+            manageDevice(saved.address, saved.requiresBond)
+            return
+        }
+
+        val managed = managedDevices.values.firstOrNull()
+        if (managed != null) {
+            manageDevice(managed.address, managed.requiresBond)
+        } else {
+            updateNotification("No Omi device selected")
+            stopSelf()
+        }
+    }
+
+    private fun stopFromUser() {
+        Log.i(TAG, "stopFromUser")
+        OmiBleLifecycleStore.markUserDisconnected(applicationContext)
+
+        val entries = managedDevices.entries.map { it.key to it.value }
+        for ((addr, managed) in entries) {
+            disconnectManagedDeviceForUser(
+                addr = addr,
+                managed = managed,
+                reason = "user_stopped",
+                recordManualEvent = true
+            )
+        }
+        managedDevices.clear()
+
+        OmiBleLifecycleStore.managedDevice(applicationContext)?.let {
+            bleManager.disconnectGatt(it.address)
+            bleManager.closeGatt(it.address)
+        }
+
+        stopForegroundCompat()
+        stopSelf()
+    }
+
+    private fun disconnectManagedDeviceForUser(
+        addr: String,
+        managed: ManagedDevice,
+        reason: String,
+        recordManualEvent: Boolean
+    ) {
+        managed.pendingReconnect?.let { handler.removeCallbacks(it) }
+        managed.pendingReconnect = null
+        managed.stabilityTimerRunnable?.let { handler.removeCallbacks(it) }
+        managed.stabilityTimerRunnable = null
+
+        if (recordManualEvent) {
+            persistDisconnectEvent(addr, 0, isManual = true, eventType = "disconnect")
+        }
+
+        bleManager.stopRssiKeepAlive()
+        bleManager.disconnectGatt(addr)
+        bleManager.closeGatt(addr)
+        managed.currentGattHash = null
+        managed.connectionStartTime = null
+        managed.currentAttemptEstablished = false
+
+        bleManager.mainHandler.post {
+            bleManager.flutterApi?.onPeripheralDisconnected(addr, reason) {}
+        }
+    }
+
+    private fun restoreFromPersistedState(source: String): Boolean {
+        val snapshot = OmiBleLifecycleStore.snapshot(applicationContext)
+
+        if (snapshot.userPaused) {
+            Log.i(TAG, "restoreFromPersistedState($source): user paused")
+            updateNotification("Paused")
+            return snapshot.managedDevice != null
+        }
+
+        if (snapshot.userDisconnected) {
+            Log.i(TAG, "restoreFromPersistedState($source): user disconnected")
+            return false
+        }
+
+        val saved = snapshot.managedDevice ?: return false
+        Log.i(TAG, "restoreFromPersistedState($source): ${saved.address}")
+        manageDevice(saved.address, saved.requiresBond)
+        return true
     }
 
     // ── Connection ──
@@ -339,6 +501,11 @@ class OmiBleForegroundService : Service() {
         val addr = address.uppercase()
         val managed = managedDevices[addr] ?: return
 
+        if (OmiBleLifecycleStore.companionAutoStartSuppressed(applicationContext)) {
+            Log.i(TAG, "triggerReconnection($source): suppressed by user intent")
+            return
+        }
+
         managed.pendingReconnect?.let { handler.removeCallbacks(it) }
         managed.pendingReconnect = null
         managed.retryCount = 0
@@ -375,6 +542,13 @@ class OmiBleForegroundService : Service() {
 
         val addr = address.uppercase()
 
+        val lifecycleSnapshot = OmiBleLifecycleStore.snapshot(applicationContext)
+        if (lifecycleSnapshot.companionAutoStartSuppressed) {
+            Log.i(TAG, "Disconnection for $addr while user state=${lifecycleSnapshot.userState}; skipping auto-retry")
+            updateNotification(if (lifecycleSnapshot.userPaused) "Paused" else "Stopped")
+            return
+        }
+
         val error = when {
             status == 22 -> "paired_to_another_phone"
             status != 0 -> "gatt_status_$status"
@@ -386,15 +560,11 @@ class OmiBleForegroundService : Service() {
             Log.w(TAG, "Device $addr disconnected before ever connecting (status=$status)")
         }
 
-        val userDisconnected = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .getBoolean(PREFS_USER_DISCONNECTED, false)
-        if (!userDisconnected) {
-            val attemptEstablished = managed?.currentAttemptEstablished ?: false
-            val eventType = if (attemptEstablished) "disconnect" else "fail_to_connect"
-            persistDisconnectEvent(addr, status, isManual = false, eventType = eventType)
-            if (eventType == "fail_to_connect") {
-                incrementFailToConnectCount(addr)
-            }
+        val attemptEstablished = managed?.currentAttemptEstablished ?: false
+        val eventType = if (attemptEstablished) "disconnect" else "fail_to_connect"
+        persistDisconnectEvent(addr, status, isManual = false, eventType = eventType)
+        if (eventType == "fail_to_connect") {
+            incrementFailToConnectCount(addr)
         }
 
         bleManager.mainHandler.post {
@@ -409,7 +579,12 @@ class OmiBleForegroundService : Service() {
         val addr = address.uppercase()
         val managed = managedDevices[addr] ?: return
 
-        if (isDestroying || status == -1 || !isBluetoothEnabled) return
+        if (
+            isDestroying ||
+            status == -1 ||
+            !isBluetoothEnabled ||
+            OmiBleLifecycleStore.companionAutoStartSuppressed(applicationContext)
+        ) return
 
         managed.retryCount++
         Log.i(TAG, "Retry #${managed.retryCount} for $addr in ${RECONNECT_DELAY_MS}ms (status=$status)")
@@ -497,6 +672,14 @@ class OmiBleForegroundService : Service() {
                     isBluetoothEnabled = false
                 }
                 BluetoothAdapter.STATE_ON -> {
+                    val lifecycleSnapshot = OmiBleLifecycleStore.snapshot(applicationContext)
+                    if (lifecycleSnapshot.companionAutoStartSuppressed) {
+                        Log.i(TAG, "Bluetooth on, but user state=${lifecycleSnapshot.userState}; staying idle")
+                        isBluetoothEnabled = true
+                        updateNotification(if (lifecycleSnapshot.userPaused) "Paused" else "Stopped")
+                        return
+                    }
+
                     Log.i(TAG, "Bluetooth on, reconnecting in 2s")
                     isBluetoothEnabled = true
                     updateNotification("Reconnecting...")
@@ -534,31 +717,54 @@ class OmiBleForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification("Connecting to Omi..."))
+        val snapshot = OmiBleLifecycleStore.snapshot(applicationContext)
+        val initialText = if (snapshot.userPaused) "Paused" else "Connecting to Omi..."
+        startForeground(NOTIFICATION_ID, buildNotification(initialText))
 
-        val address = intent?.getStringExtra("device_address")
-
-        if (address != null) {
-            val requiresBond = intent.getBooleanExtra("requires_bond", false)
-            manageDevice(address, requiresBond)
-        } else {
-            // No device specified — Omi streams via WebSocket which needs the app.
-            // No point keeping BLE alive without it.
-            Log.i(TAG, "onStartCommand: no device address, stopping")
-            stopSelf()
+        when (intent?.action) {
+            ACTION_PAUSE -> {
+                pauseFromUser()
+                return START_STICKY
+            }
+            ACTION_RESUME -> {
+                resumeFromUser()
+                return START_STICKY
+            }
+            ACTION_STOP -> {
+                stopFromUser()
+                return START_NOT_STICKY
+            }
         }
 
-        return START_NOT_STICKY
+        val address = intent?.getStringExtra(EXTRA_DEVICE_ADDRESS)
+        if (address != null) {
+            val requiresBond = intent.getBooleanExtra(EXTRA_REQUIRES_BOND, false)
+            manageDevice(address, requiresBond)
+            return START_STICKY
+        }
+
+        if (!restoreFromPersistedState("onStartCommand")) {
+            Log.i(TAG, "onStartCommand: no device to restore, stopping")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        return START_STICKY
     }
 
     override fun onDestroy() {
         Log.d(TAG, "Service destroying")
         isDestroying = true
+        val userIntentSuppressesRestart = OmiBleLifecycleStore
+            .snapshot(applicationContext)
+            .companionAutoStartSuppressed
 
         for ((addr, managed) in managedDevices) {
             managed.pendingReconnect?.let { handler.removeCallbacks(it) }
             managed.stabilityTimerRunnable?.let { handler.removeCallbacks(it) }
-            persistDisconnectEvent(addr, -1, isManual = false, eventType = "disconnect")
+            if (!userIntentSuppressesRestart) {
+                persistDisconnectEvent(addr, -1, isManual = false, eventType = "disconnect")
+            }
             bleManager.disconnectGatt(addr)
             bleManager.closeGatt(addr)
             bleManager.mainHandler.post {
@@ -574,6 +780,11 @@ class OmiBleForegroundService : Service() {
         try { unregisterReceiver(bondStateReceiver) } catch (_: Exception) {}
 
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i(TAG, "Task removed; keeping BLE foreground service state intact")
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -747,19 +958,62 @@ class OmiBleForegroundService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
+    private fun serviceActionPendingIntent(actionName: String, requestCode: Int): PendingIntent {
+        val intent = Intent(this, OmiBleForegroundService::class.java).apply {
+            setAction(actionName)
+        }
+        return PendingIntent.getService(
+            this,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun stopForegroundCompat() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            stopForeground(Service.STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+    }
+
     private fun buildNotification(contentText: String): Notification {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
         val pendingIntent = if (launchIntent != null) {
             PendingIntent.getActivity(this, 0, launchIntent, PendingIntent.FLAG_IMMUTABLE)
         } else null
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val snapshot = OmiBleLifecycleStore.snapshot(applicationContext)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Omi")
             .setContentText(contentText)
             .setSmallIcon(applicationInfo.icon)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .apply { if (pendingIntent != null) setContentIntent(pendingIntent) }
-            .build()
+
+        if (snapshot.userPaused) {
+            builder.addAction(
+                applicationInfo.icon,
+                "Resume",
+                serviceActionPendingIntent(ACTION_RESUME, 1002)
+            )
+        } else {
+            builder.addAction(
+                applicationInfo.icon,
+                "Pause",
+                serviceActionPendingIntent(ACTION_PAUSE, 1001)
+            )
+        }
+
+        builder.addAction(
+            applicationInfo.icon,
+            "Stop",
+            serviceActionPendingIntent(ACTION_STOP, 1003)
+        )
+
+        return builder.build()
     }
 }

@@ -45,8 +45,16 @@ class BleHostApiImpl(private val getActivity: () -> Activity?) : BleHostApi {
 
     override fun unmanageDevice(uuid: String) {
         Log.i(TAG, "unmanageDevice: $uuid")
-        OmiBleForegroundService.instance?.unmanageDevice(uuid)
-            ?: bleManager.closeGatt(uuid) // Fallback if service not running
+        val service = OmiBleForegroundService.instance
+        if (service != null) {
+            service.unmanageDevice(uuid)
+            return
+        }
+
+        getActivity()?.applicationContext?.let {
+            OmiBleLifecycleStore.markUserDisconnected(it)
+        }
+        bleManager.closeGatt(uuid) // Fallback if service not running
     }
 
     // ── Bonding ──
